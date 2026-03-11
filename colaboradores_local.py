@@ -1568,7 +1568,7 @@ def export_pair_pdf(input_pdf_path: str, pair: PairRecord, output_pdf_path: str)
 def render_pdf_page_preview(
     input_pdf_path: str,
     page_number: int,
-    max_size: Tuple[int, int] = (430, 560),
+    max_size: Optional[Tuple[int, int]] = None,
     zoom: float = 1.35,
 ) -> Image.Image:
     if not input_pdf_path:
@@ -1584,9 +1584,26 @@ def render_pdf_page_preview(
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        resampling_module = getattr(Image, "Resampling", Image)
-        image.thumbnail(max_size, resampling_module.LANCZOS)
+        if max_size:
+            resampling_module = getattr(Image, "Resampling", Image)
+            image.thumbnail(max_size, resampling_module.LANCZOS)
+
         return image
+    finally:
+        doc.close()
+        
+def get_pdf_page_size(input_pdf_path: str, page_number: int) -> Tuple[float, float]:
+    if not input_pdf_path:
+        raise ValueError("Caminho do PDF de origem não informado.")
+
+    if page_number < 1:
+        raise ValueError("Número de página inválido.")
+
+    doc = fitz.open(input_pdf_path)
+    try:
+        page = doc.load_page(page_number - 1)
+        rect = page.rect
+        return float(rect.width), float(rect.height)
     finally:
         doc.close()
 
@@ -2215,7 +2232,16 @@ class ColaboradoresApp:
 
         title_var = tk.StringVar()
         summary_var = tk.StringVar()
-        progress_var = tk.StringVar()
+
+        progress_total_var = tk.StringVar()
+        progress_decided_var = tk.StringVar()
+        progress_remaining_var = tk.StringVar()
+        progress_confirmed_var = tk.StringVar()
+        progress_no_match_var = tk.StringVar()
+        progress_exported_var = tk.StringVar()
+
+        compact_info_var = tk.StringVar()
+
         list_var = tk.StringVar()
         pair_var = tk.StringVar()
         candidate_var = tk.StringVar()
@@ -2223,6 +2249,8 @@ class ColaboradoresApp:
         candidate_preview_meta_var = tk.StringVar()
         action_var = tk.StringVar(value="Nenhuma ação manual realizada nesta pendência.")
         code_var = tk.StringVar()
+        export_hint_var = tk.StringVar()
+        export_button_var = tk.StringVar(value="Gerar todos os PDFs confirmados")
 
         ttk.Label(
             main,
@@ -2238,100 +2266,137 @@ class ColaboradoresApp:
         
         progress_frame = ttk.LabelFrame(main, text="Progresso da revisão", padding=10)
         progress_frame.pack(fill="x", pady=(0, 10))
+        
+        compact_info_frame = ttk.LabelFrame(main, text="Resumo atual", padding=8)
+        compact_info_frame.pack(fill="x", pady=(0, 10))
 
         ttk.Label(
-            progress_frame,
-            textvariable=progress_var,
+            compact_info_frame,
+            textvariable=compact_info_var,
             justify="left",
         ).pack(anchor="w")
         
+        controls_frame = ttk.Frame(main)
+        controls_frame.pack(fill="x", pady=(0, 10))
+
+        navigation_frame = ttk.LabelFrame(controls_frame, text="Navegação", padding=8)
+        navigation_frame.pack(fill="x", pady=(0, 8))
+
+        top_actions_row = ttk.Frame(controls_frame)
+        top_actions_row.pack(fill="x")
+
+        for col in range(6):
+            progress_frame.columnconfigure(col, weight=1)
+
+        def create_progress_box(parent, col, title, value_var):
+            box = ttk.Frame(parent, padding=(8, 4))
+            box.grid(row=0, column=col, sticky="ew", padx=4, pady=2)
+
+            ttk.Label(
+                box,
+                text=title,
+                font=("Segoe UI", 9, "bold"),
+            ).pack(anchor="center")
+
+            ttk.Label(
+                box,
+                textvariable=value_var,
+                font=("Segoe UI", 10),
+            ).pack(anchor="center", pady=(2, 0))
+
+        create_progress_box(progress_frame, 0, "Total", progress_total_var)
+        create_progress_box(progress_frame, 1, "Decididas", progress_decided_var)
+        create_progress_box(progress_frame, 2, "Faltam", progress_remaining_var)
+        create_progress_box(progress_frame, 3, "Confirmadas", progress_confirmed_var)
+        create_progress_box(progress_frame, 4, "Sem correspondência", progress_no_match_var)
+        create_progress_box(progress_frame, 5, "Exportadas", progress_exported_var)
+        
         preview_container = ttk.Frame(main)
-        preview_container.pack(fill="x", pady=(0, 10))
+        preview_container.pack(fill="both", expand=True, pady=(0, 10))
+
+        preview_container.columnconfigure(0, weight=1, uniform="preview")
+        preview_container.columnconfigure(1, weight=1, uniform="preview")
+        preview_container.rowconfigure(0, weight=1)
 
         list_preview_frame = ttk.LabelFrame(preview_container, text="Prévia da lista", padding=8)
-        list_preview_frame.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        list_preview_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        list_preview_label = ttk.Label(
-            list_preview_frame,
-            text="Prévia da lista indisponível.",
-            anchor="center",
-            justify="center",
+        candidate_preview_frame = ttk.LabelFrame(preview_container, text="Prévia da prova candidata", padding=8)
+        candidate_preview_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        list_preview_area = ttk.Frame(list_preview_frame)
+        list_preview_area.pack(fill="both", expand=True)
+
+        list_preview_canvas = tk.Canvas(
+            list_preview_area,
+            highlightthickness=1,
+            background="white",
         )
-        list_preview_label.pack(fill="both", expand=True)
+        list_preview_vscroll = ttk.Scrollbar(
+            list_preview_area,
+            orient="vertical",
+            command=list_preview_canvas.yview,
+        )
+        list_preview_hscroll = ttk.Scrollbar(
+            list_preview_area,
+            orient="horizontal",
+            command=list_preview_canvas.xview,
+        )
+
+        list_preview_canvas.configure(
+            yscrollcommand=list_preview_vscroll.set,
+            xscrollcommand=list_preview_hscroll.set,
+        )
+
+        list_preview_vscroll.pack(side="right", fill="y")
+        list_preview_hscroll.pack(side="bottom", fill="x")
+        list_preview_canvas.pack(side="left", fill="both", expand=True)
         
         list_preview_actions = ttk.Frame(list_preview_frame)
         list_preview_actions.pack(fill="x", pady=(8, 0))
 
-        candidate_preview_frame = ttk.LabelFrame(preview_container, text="Prévia da prova candidata", padding=8)
-        candidate_preview_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        candidate_preview_area = ttk.Frame(candidate_preview_frame)
+        candidate_preview_area.pack(fill="both", expand=True)
 
-        candidate_preview_label = ttk.Label(
-            candidate_preview_frame,
-            text="Prévia da prova candidata indisponível.",
-            anchor="center",
-            justify="center",
+        candidate_preview_canvas = tk.Canvas(
+            candidate_preview_area,
+            highlightthickness=1,
+            background="white",
         )
-        candidate_preview_label.pack(fill="both", expand=True)
+        candidate_preview_vscroll = ttk.Scrollbar(
+            candidate_preview_area,
+            orient="vertical",
+            command=candidate_preview_canvas.yview,
+        )
+        candidate_preview_hscroll = ttk.Scrollbar(
+            candidate_preview_area,
+            orient="horizontal",
+            command=candidate_preview_canvas.xview,
+        )
+
+        candidate_preview_canvas.configure(
+            yscrollcommand=candidate_preview_vscroll.set,
+            xscrollcommand=candidate_preview_hscroll.set,
+        )
+
+        candidate_preview_vscroll.pack(side="right", fill="y")
+        candidate_preview_hscroll.pack(side="bottom", fill="x")
+        candidate_preview_canvas.pack(side="left", fill="both", expand=True)
         
         candidate_preview_actions = ttk.Frame(candidate_preview_frame)
         candidate_preview_actions.pack(fill="x", pady=(8, 0))
 
-        info_frame = ttk.Frame(main)
-        info_frame.pack(fill="x", pady=(0, 10))
+        nav_review = ttk.Frame(navigation_frame)
+        nav_review.pack(fill="x", pady=(0, 4))
 
-        list_frame = ttk.LabelFrame(info_frame, text="Lista pendente", padding=10)
-        list_frame.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        nav_candidate = ttk.Frame(navigation_frame)
+        nav_candidate.pack(fill="x")
 
-        ttk.Label(
-            list_frame,
-            textvariable=list_var,
-            justify="left",
-        ).pack(anchor="w")
+        actions = ttk.LabelFrame(top_actions_row, text="Ações da revisão manual", padding=10)
+        actions.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
-        candidate_frame = ttk.LabelFrame(info_frame, text="Prova candidata atual", padding=10)
-        candidate_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
-
-        ttk.Label(
-            candidate_frame,
-            textvariable=candidate_var,
-            justify="left",
-        ).pack(anchor="w")
-
-        pair_frame = ttk.LabelFrame(main, text="Estado atual da revisão", padding=10)
-        pair_frame.pack(fill="x", pady=(0, 10))
-
-        ttk.Label(
-            pair_frame,
-            textvariable=pair_var,
-            justify="left",
-        ).pack(anchor="w")
-
-        notes_container = ttk.Frame(main)
-        notes_container.pack(fill="both", expand=True)
-
-        item_notes_frame = ttk.LabelFrame(notes_container, text="Observações da pendência", padding=6)
-        item_notes_frame.pack(side="left", fill="both", expand=True, padx=(0, 6))
-
-        item_notes_text = tk.Text(item_notes_frame, wrap="word", height=14)
-        item_notes_text.pack(fill="both", expand=True)
-
-        candidate_notes_frame = ttk.LabelFrame(notes_container, text="Observações da prova candidata", padding=6)
-        candidate_notes_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
-
-        candidate_notes_text = tk.Text(candidate_notes_frame, wrap="word", height=14)
-        candidate_notes_text.pack(fill="both", expand=True)
-
-        nav_review = ttk.Frame(main)
-        nav_review.pack(fill="x", pady=(10, 4))
-
-        nav_candidate = ttk.Frame(main)
-        nav_candidate.pack(fill="x", pady=(0, 8))
-
-        actions = ttk.LabelFrame(main, text="Ações da revisão manual", padding=10)
-        actions.pack(fill="x", pady=(0, 10))
-        
-        code_frame = ttk.LabelFrame(main, text="Código final do PDF", padding=10)
-        code_frame.pack(fill="x", pady=(0, 10))
+        code_frame = ttk.LabelFrame(top_actions_row, text="Código final do PDF", padding=10)
+        code_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
 
         ttk.Label(
             code_frame,
@@ -2352,10 +2417,16 @@ class ColaboradoresApp:
             actions,
             textvariable=action_var,
             justify="left",
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 6))
 
         action_buttons = ttk.Frame(actions)
         action_buttons.pack(fill="x")
+        
+        ttk.Label(
+            actions,
+            textvariable=export_hint_var,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
 
         footer = ttk.Frame(main)
         footer.pack(fill="x")
@@ -2383,6 +2454,45 @@ class ColaboradoresApp:
             idx = max(0, min(candidate_preview_page_index, len(candidate.pages) - 1))
             return candidate.pages[idx]
 
+        def bind_preview_pan(canvas_widget: tk.Canvas):
+            canvas_widget.bind(
+                "<ButtonPress-1>",
+                lambda event, c=canvas_widget: c.scan_mark(event.x, event.y),
+            )
+            canvas_widget.bind(
+                "<B1-Motion>",
+                lambda event, c=canvas_widget: c.scan_dragto(event.x, event.y, gain=1),
+            )
+            
+        def bind_preview_mouse_controls(canvas_widget: tk.Canvas, preview_kind: str):
+            def _on_mousewheel(event):
+                ctrl_pressed = (event.state & 0x0004) != 0
+                shift_pressed = (event.state & 0x0001) != 0
+
+                if ctrl_pressed:
+                    delta = 0.25 if event.delta > 0 else -0.25
+                    if preview_kind == "list":
+                        change_list_preview_zoom(delta)
+                    else:
+                        change_candidate_preview_zoom(delta)
+                    return "break"
+
+                units = -1 if event.delta > 0 else 1
+
+                if shift_pressed:
+                    canvas_widget.xview_scroll(units, "units")
+                else:
+                    canvas_widget.yview_scroll(units, "units")
+
+                return "break"
+
+            canvas_widget.bind("<Enter>", lambda event, c=canvas_widget: c.focus_set())
+            canvas_widget.bind("<MouseWheel>", _on_mousewheel)
+            
+        bind_preview_pan(list_preview_canvas)
+        bind_preview_pan(candidate_preview_canvas)
+        bind_preview_mouse_controls(list_preview_canvas, "list")
+        bind_preview_mouse_controls(candidate_preview_canvas, "candidate")
 
         def change_list_preview_zoom(delta: float):
             nonlocal list_preview_zoom
@@ -2407,17 +2517,80 @@ class ColaboradoresApp:
             if 0 <= new_index < len(candidate.pages):
                 candidate_preview_page_index = new_index
                 render_current_review()
+                
+        def reset_list_preview_zoom():
+            nonlocal list_preview_zoom
+            list_preview_zoom = 1.35
+            render_current_review()
+
+
+        def reset_candidate_preview_zoom():
+            nonlocal candidate_preview_zoom
+            candidate_preview_zoom = 1.35
+            render_current_review()
+            
+        def fit_list_preview_to_width():
+            nonlocal list_preview_zoom
+
+            item = get_current_item()
+            if not item.list_record:
+                return
+
+            try:
+                list_preview_canvas.update_idletasks()
+                visible_width = max(200, list_preview_canvas.winfo_width() - 20)
+                pdf_width, _ = get_pdf_page_size(
+                    self.last_result.input_pdf_path,
+                    item.list_record.page_number,
+                )
+                new_zoom = round(visible_width / pdf_width, 2)
+                list_preview_zoom = max(0.8, min(4.0, new_zoom))
+                render_current_review()
+            except Exception as exc:
+                messagebox.showerror("Pré-visualização", f"Não foi possível ajustar a lista à largura.\n\n{exc}")
+
+
+        def fit_candidate_preview_to_width():
+            nonlocal candidate_preview_zoom
+
+            page_number = get_current_candidate_preview_page_number()
+            if not page_number:
+                return
+
+            try:
+                candidate_preview_canvas.update_idletasks()
+                visible_width = max(200, candidate_preview_canvas.winfo_width() - 20)
+                pdf_width, _ = get_pdf_page_size(
+                    self.last_result.input_pdf_path,
+                    page_number,
+                )
+                new_zoom = round(visible_width / pdf_width, 2)
+                candidate_preview_zoom = max(0.8, min(4.0, new_zoom))
+                render_current_review()
+            except Exception as exc:
+                messagebox.showerror("Pré-visualização", f"Não foi possível ajustar a prova à largura.\n\n{exc}")
         
-        def set_preview_image(label_widget: ttk.Label, pil_image: Optional[Image.Image], empty_text: str):
+        def set_preview_canvas_image(canvas_widget: tk.Canvas, pil_image: Optional[Image.Image], empty_text: str):
+            canvas_widget.delete("all")
+
             if pil_image is None:
-                label_widget.configure(image="", text=empty_text)
-                label_widget.image = None
+                canvas_widget.create_text(
+                    20,
+                    20,
+                    anchor="nw",
+                    text=empty_text,
+                    width=max(canvas_widget.winfo_width() - 40, 200),
+                )
+                canvas_widget.configure(scrollregion=canvas_widget.bbox("all"))
+                canvas_widget.image = None
                 return
 
             photo = ImageTk.PhotoImage(pil_image)
-            label_widget.configure(image=photo, text="")
-            label_widget.image = photo
-
+            canvas_widget.create_image(0, 0, anchor="nw", image=photo)
+            canvas_widget.image = photo
+            canvas_widget.configure(scrollregion=canvas_widget.bbox("all"))
+            canvas_widget.xview_moveto(0)
+            canvas_widget.yview_moveto(0)
 
         def update_preview_panels(item: ManualReviewItem, candidate: Optional[ExamBlock]):
             input_pdf_path = self.last_result.input_pdf_path
@@ -2431,6 +2604,7 @@ class ColaboradoresApp:
                     list_image = render_pdf_page_preview(
                         input_pdf_path=input_pdf_path,
                         page_number=item.list_record.page_number,
+                        max_size=None,
                         zoom=list_preview_zoom,
                     )
                 except Exception:
@@ -2441,18 +2615,19 @@ class ColaboradoresApp:
                     candidate_image = render_pdf_page_preview(
                         input_pdf_path=input_pdf_path,
                         page_number=candidate_page_number,
+                        max_size=None,
                         zoom=candidate_preview_zoom,
                     )
                 except Exception:
                     candidate_image = None
 
-            set_preview_image(
-                list_preview_label,
+            set_preview_canvas_image(
+                list_preview_canvas,
                 list_image,
                 "Prévia da lista indisponível."
             )
-            set_preview_image(
-                candidate_preview_label,
+            set_preview_canvas_image(
+                candidate_preview_canvas,
                 candidate_image,
                 "Prévia da prova candidata indisponível."
             )
@@ -2544,9 +2719,8 @@ class ColaboradoresApp:
                 page_number=candidate.start_page,
             )
         
-        def build_manual_review_progress_text() -> str:
+        def update_manual_review_progress_vars():
             total = len(items)
-            pending = sum(1 for item in items if item.review_status == "PENDENTE")
             confirmed = sum(1 for item in items if item.review_status == "CONFIRMADO_MANUAL")
             no_match = sum(1 for item in items if item.review_status == "SEM_CORRESPONDENCIA")
             exported = sum(1 for item in items if item.generated_output_file)
@@ -2554,14 +2728,12 @@ class ColaboradoresApp:
             decided = confirmed + no_match
             remaining = total - decided
 
-            return "\n".join([
-                f"Total de pendências: {total}",
-                f"Já decididas: {decided}",
-                f"Ainda faltam: {remaining}",
-                f"Confirmadas manualmente: {confirmed}",
-                f"Sem correspondência: {no_match}",
-                f"PDFs manuais já exportados: {exported}",
-            ])
+            progress_total_var.set(str(total))
+            progress_decided_var.set(str(decided))
+            progress_remaining_var.set(str(remaining))
+            progress_confirmed_var.set(str(confirmed))
+            progress_no_match_var.set(str(no_match))
+            progress_exported_var.set(str(exported))
         
         def sync_item_logical_id(item: ManualReviewItem):
             if item.review_status == "SEM_CORRESPONDENCIA":
@@ -2587,6 +2759,41 @@ class ColaboradoresApp:
             clear_manual_export_state(item)
             sync_item_logical_id(item)
             render_current_review()
+            
+        def apply_typed_code_and_stop(event=None):
+            apply_typed_code()
+            return "break"
+
+
+        def clear_typed_code_and_stop(event=None):
+            clear_typed_code()
+            return "break"
+        
+        code_entry.bind("<Return>", apply_typed_code_and_stop)
+        code_entry.bind("<KP_Enter>", apply_typed_code_and_stop)
+        
+        def is_focus_on_code_entry() -> bool:
+            return win.focus_get() == code_entry
+
+
+        def shortcut_if_not_typing(callback):
+            def _handler(event=None):
+                if is_focus_on_code_entry():
+                    return None
+                callback()
+                return "break"
+            return _handler
+
+
+        def export_shortcut(event=None):
+            if is_focus_on_code_entry():
+                return None
+
+            if btn_export_manual.instate(["disabled"]):
+                return "break"
+
+            export_all_manual_pdfs()
+            return "break"
             
         def clear_manual_export_state(item: ManualReviewItem):
             item.generated_output_file = None
@@ -2662,34 +2869,64 @@ class ColaboradoresApp:
                 btn_accept.state(["disabled"])
                 btn_reject_next.state(["disabled"])
 
-            has_any_confirmed_pending_export = any(
-                item.review_status == "CONFIRMADO_MANUAL"
-                and item.pair.list_record
-                and item.pair.exam_block
-                and not item.generated_output_file
+            all_items_classified = all(
+                item.review_status in {"CONFIRMADO_MANUAL", "SEM_CORRESPONDENCIA"}
                 for item in items
             )
 
-            if has_any_confirmed_pending_export:
+            classified_count = sum(
+                1 for item in items
+                if item.review_status in {"CONFIRMADO_MANUAL", "SEM_CORRESPONDENCIA"}
+            )
+
+            confirmed_pending_export_count = sum(
+                1 for item in items
+                if item.review_status == "CONFIRMADO_MANUAL"
+                and item.pair.list_record
+                and item.pair.exam_block
+                and not item.generated_output_file
+            )
+
+            if all_items_classified and confirmed_pending_export_count > 0:
                 btn_export_manual.state(["!disabled"])
+                export_button_var.set(f"Gerar {confirmed_pending_export_count} PDF(s) confirmado(s)")
+                export_hint_var.set("Classificação concluída. A exportação em lote já está liberada.")
             else:
                 btn_export_manual.state(["disabled"])
+
+                if not all_items_classified:
+                    remaining_count = len(items) - classified_count
+                    export_button_var.set(f"Gerar PDFs ({confirmed_pending_export_count})")
+                    export_hint_var.set(
+                        f"Finalize a classificação de {remaining_count} lista(s) para liberar a exportação."
+                    )
+                else:
+                    export_button_var.set("Gerar todos os PDFs confirmados")
+                    export_hint_var.set("Classificação concluída. Não há PDFs manuais pendentes de exportação.")
                 
             current_candidate = get_current_candidate()
 
             if get_current_item().list_record:
                 btn_list_zoom_out.state(["!disabled"])
                 btn_list_zoom_in.state(["!disabled"])
+                btn_list_fit_width.state(["!disabled"])
+                btn_list_zoom_reset.state(["!disabled"])
             else:
                 btn_list_zoom_out.state(["disabled"])
                 btn_list_zoom_in.state(["disabled"])
-
+                btn_list_fit_width.state(["disabled"])
+                btn_list_zoom_reset.state(["disabled"])
+                
             if current_candidate and current_candidate.pages:
                 btn_candidate_zoom_out.state(["!disabled"])
                 btn_candidate_zoom_in.state(["!disabled"])
+                btn_candidate_fit_width.state(["!disabled"])
+                btn_candidate_zoom_reset.state(["!disabled"])
             else:
                 btn_candidate_zoom_out.state(["disabled"])
                 btn_candidate_zoom_in.state(["disabled"])
+                btn_candidate_fit_width.state(["disabled"])
+                btn_candidate_zoom_reset.state(["disabled"])
 
             if current_candidate and current_candidate.pages and candidate_preview_page_index > 0:
                 btn_candidate_page_prev.state(["!disabled"])
@@ -2746,70 +2983,27 @@ class ColaboradoresApp:
                 f"Review ID: {item.review_id} | Status da revisão: {item.review_status}"
             )
 
-            progress_var.set(build_manual_review_progress_text())
-
-            list_var.set(
-                "\n".join([
-                    f"Página da lista: {item.list_record.page_number if item.list_record else '-'}",
-                    f"Código da lista: {item.list_record.logical_id if item.list_record and item.list_record.logical_id else '-'}",
-                    f"Código atual da pendência: {item.pair.logical_id or '-'}",
-                    f"Código digitável atual: {item.typed_logical_id or '-'}",
-                ])
-            )
-
-            pair_var.set(
-                "\n".join([
-                    f"Status atual do par: {item.pair.status}",
-                    f"Status da revisão: {item.review_status}",
-                    f"Código final atual: {item.pair.logical_id or '-'}",
-                    f"Prova sugerida inicialmente: {item.suggested_exam_block.start_page if item.suggested_exam_block else '-'}",
-                    f"Prova confirmada manualmente: {item.confirmed_exam_start_page if item.confirmed_exam_start_page else '-'}",
-                    f"Arquivo gerado manualmente: {item.generated_output_file or '-'}",
-                ])
-            )
+            update_manual_review_progress_vars()
 
             if candidate:
-                candidate_var.set(
-                    "\n".join([
-                        f"Prova candidata {candidate_index + 1} de {len(item.candidate_exam_blocks)}",
-                        f"Página inicial: {candidate.start_page}",
-                        f"Páginas do bloco: {candidate.pages}",
-                        f"Código da prova: {candidate.logical_id or candidate.code or '-'}",
-                        f"Nome na prova: {candidate.employee_name or '-'}",
-                        f"Confiança média: {candidate.confidence:.2f}",
-                    ])
+                candidate_summary = (
+                    f"Prova: {candidate_index + 1} de {len(item.candidate_exam_blocks)}"
+                    f" | pág. inicial {candidate.start_page}"
+                    f" | código {candidate.logical_id or candidate.code or '-'}"
                 )
             else:
-                candidate_var.set(
-                    "\n".join([
-                        "Nenhuma prova candidata disponível",
-                        "Página inicial: -",
-                        "Páginas do bloco: -",
-                        "Código da prova: -",
-                        "Nome na prova: -",
-                        "Confiança média: -",
-                    ])
-                )
+                candidate_summary = "Prova: nenhuma candidata disponível"
 
-            item_notes = []
-            if item.notes:
-                item_notes.extend([f"- {note}" for note in item.notes])
-            elif item.pair.notes:
-                item_notes.extend([f"- {note}" for note in item.pair.notes])
-            else:
-                item_notes.append("- Nenhuma observação")
+            generated_name = Path(item.generated_output_file).name if item.generated_output_file else "-"
 
-            set_text(item_notes_text, item_notes)
-
-            candidate_notes = []
-            if candidate and candidate.notes:
-                candidate_notes.extend([f"- {note}" for note in candidate.notes])
-            elif candidate:
-                candidate_notes.append("- Nenhuma observação da prova candidata")
-            else:
-                candidate_notes.append("- Sem prova candidata")
-
-            set_text(candidate_notes_text, candidate_notes)
+            compact_info_var.set(
+                "\n".join([
+                    f"Lista: pág. {item.list_record.page_number if item.list_record else '-'} | código {item.list_record.logical_id if item.list_record and item.list_record.logical_id else '-'}",
+                    candidate_summary,
+                    f"Revisão: {item.review_status} | prova confirmada: {item.confirmed_exam_start_page if item.confirmed_exam_start_page else '-'} | arquivo: {generated_name}",
+                    f"Código final do PDF: {item.pair.logical_id or '-'}",
+                ])
+            )
 
             if item.review_status == "CONFIRMADO_MANUAL":
                 action_var.set(
@@ -2944,7 +3138,7 @@ class ColaboradoresApp:
         
         btn_export_manual = ttk.Button(
             action_buttons,
-            text="Gerar todos os PDFs confirmados",
+            textvariable=export_button_var,
             command=export_all_manual_pdfs,
         )
         btn_export_manual.pack(side="left", padx=6)
@@ -2976,6 +3170,20 @@ class ColaboradoresApp:
             command=lambda: change_list_preview_zoom(0.25),
         )
         btn_list_zoom_in.pack(side="left", padx=6)
+
+        btn_list_fit_width = ttk.Button(
+            list_preview_actions,
+            text="Ajustar à largura",
+            command=fit_list_preview_to_width,
+        )
+        btn_list_fit_width.pack(side="left", padx=6)
+
+        btn_list_zoom_reset = ttk.Button(
+            list_preview_actions,
+            text="Resetar zoom",
+            command=reset_list_preview_zoom,
+        )
+        btn_list_zoom_reset.pack(side="left", padx=6)
 
         ttk.Label(
             list_preview_actions,
@@ -3010,10 +3218,36 @@ class ColaboradoresApp:
         )
         btn_candidate_zoom_in.pack(side="left", padx=6)
 
+        btn_candidate_fit_width = ttk.Button(
+            candidate_preview_actions,
+            text="Ajustar à largura",
+            command=fit_candidate_preview_to_width,
+        )
+        btn_candidate_fit_width.pack(side="left", padx=6)
+
+        btn_candidate_zoom_reset = ttk.Button(
+            candidate_preview_actions,
+            text="Resetar zoom",
+            command=reset_candidate_preview_zoom,
+        )
+        btn_candidate_zoom_reset.pack(side="left", padx=6)
+
         ttk.Label(
             candidate_preview_actions,
             textvariable=candidate_preview_meta_var,
         ).pack(side="left", padx=12)
+        
+        win.bind("<Alt-Left>", shortcut_if_not_typing(lambda: change_review(-1)))
+        win.bind("<Alt-Right>", shortcut_if_not_typing(lambda: change_review(1)))
+
+        win.bind("<Control-Left>", shortcut_if_not_typing(lambda: change_candidate(-1)))
+        win.bind("<Control-Right>", shortcut_if_not_typing(lambda: change_candidate(1)))
+
+        win.bind("<F2>", apply_typed_code_and_stop)
+        win.bind("<F4>", clear_typed_code_and_stop)
+
+        win.bind("<Control-Return>", export_shortcut)
+        win.bind("<Control-KP_Enter>", export_shortcut)
 
         ttk.Button(footer, text="Fechar", command=win.destroy).pack(side="right")
 
