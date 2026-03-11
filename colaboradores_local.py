@@ -47,7 +47,6 @@ APP_DIR = get_app_dir()
 BASE_DIR = APP_DIR / "colaboradores_data"
 BRUTO_DIR = BASE_DIR / "bruto"
 PROCESSADO_DIR = BASE_DIR / "processado"
-RELATORIOS_DIR = BASE_DIR / "relatorios"
 OCR_LANG = "por"
 
 CODE_PATTERN = re.compile(r"\bPE-[0-9][A-Z&]+-[0-9]{5}\b", re.IGNORECASE)
@@ -205,9 +204,6 @@ class ProcessResult:
 def ensure_base_folders() -> None:
     BRUTO_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSADO_DIR.mkdir(parents=True, exist_ok=True)
-    RELATORIOS_DIR.mkdir(parents=True, exist_ok=True)
-
-
 
 def configure_tesseract() -> None:
     portable_exe = APP_DIR / "tesseract" / "tesseract.exe"
@@ -1544,7 +1540,6 @@ def ensure_output_structure(collaborator_name: Optional[str]) -> Tuple[str, str,
     collaborator_root.mkdir(parents=True, exist_ok=True)
     run_output_dir.mkdir(parents=True, exist_ok=True)
     pdfs_dir.mkdir(parents=True, exist_ok=True)
-    RELATORIOS_DIR.mkdir(parents=True, exist_ok=True)
     return str(run_output_dir), str(pdfs_dir), run_id
 
 
@@ -1918,36 +1913,8 @@ def write_reports(result: ProcessResult) -> None:
         for pair in result.pairs:
             writer.writerow(build_pair_summary_row(pair))
 
-    local_txt = Path(result.output_dir) / "relatorio.txt"
-    local_csv = Path(result.output_dir) / "resumo.csv"
-
-    with open(local_txt, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-
-    with open(local_csv, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "workflow_bucket",
-            "workflow_label",
-            "logical_id",
-            "status",
-            "list_page",
-            "exam_start_page",
-            "exam_pages",
-            "output_file",
-            "exported",
-            "notes",
-        ])
-        writer.writeheader()
-        for pair in result.pairs:
-            writer.writerow(build_pair_summary_row(pair))
-
-    # Conversão CSV -> XLSX
     report_xlsx_path = str(Path(result.report_csv_path).with_suffix(".xlsx"))
-    local_xlsx = str(Path(result.output_dir) / "resumo.xlsx")
-
     csv_to_xlsx(result.report_csv_path, report_xlsx_path)
-    csv_to_xlsx(str(local_csv), local_xlsx)
-    
 
 def process_selected_pdf(file_path: str, progress_callback: Optional[Callable[[str], None]] = None) -> ProcessResult:
     if not file_path:
@@ -1973,9 +1940,11 @@ def process_selected_pdf(file_path: str, progress_callback: Optional[Callable[[s
         progress_callback("Preparando pasta de saída...")
     run_output_dir, pdfs_dir, run_id = ensure_output_structure(collaborator_name)
 
-    collaborator_folder = build_collaborator_folder_name(collaborator_name)
-    report_txt_path = str(RELATORIOS_DIR / f"{collaborator_folder}_{run_id}_relatorio.txt")
-    report_csv_path = str(RELATORIOS_DIR / f"{collaborator_folder}_{run_id}_resumo.csv")
+    reports_dir = Path(run_output_dir) / "relatorios"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    report_txt_path = str(reports_dir / "relatorio.txt")
+    report_csv_path = str(reports_dir / "resumo.csv")
 
     if progress_callback:
         progress_callback("Pareando listas e provas...")
@@ -2026,10 +1995,8 @@ class ColaboradoresApp:
         self.last_output_dir: Optional[str] = None
         self.last_result: Optional[ProcessResult] = None
         self._build_ui()
-        self._log(f"Pasta base: {BASE_DIR}")
-        self._log(f"Bruto: {BRUTO_DIR}")
-        self._log(f"Processado: {PROCESSADO_DIR}")
-        self._log(f"Relatórios: {RELATORIOS_DIR}")
+        self._log("Sistema pronto.")
+        self._log("Selecione um PDF e use Pré-análise ou Processar.")
 
 
     def _build_ui(self):
@@ -2056,7 +2023,7 @@ class ColaboradoresApp:
             main,
             text=(
                 "Uso local: selecione um PDF e clique em Processar.\n"
-                "Os arquivos gerados ficam em colaboradores_data/processado e os relatórios em colaboradores_data/relatorios."
+                "Os arquivos gerados e os relatórios ficam na pasta da execução dentro de colaboradores_data/processado."
             ),
             justify="left",
         )
@@ -2074,6 +2041,19 @@ class ColaboradoresApp:
         self.text.insert("end", message + "\n")
         self.text.see("end")
         self.root.update_idletasks()
+        
+    
+    def _clear_log(self):
+        self.text.delete("1.0", "end")
+        self.root.update_idletasks()
+
+
+    def _start_user_console(self, title: str):
+        self._clear_log()
+        self._log(title)
+        if self.selected_pdf:
+            self._log(f"Arquivo: {Path(self.selected_pdf).name}")
+        self._log("")
 
 
     def select_pdf(self):
@@ -2085,7 +2065,10 @@ class ColaboradoresApp:
         if path:
             self.selected_pdf = path
             self.path_var.set(path)
-            self._log(f"PDF selecionado: {path}")
+            self._clear_log()
+            self._log("PDF selecionado com sucesso.")
+            self._log(f"Arquivo: {Path(path).name}")
+            self._log(f"Local: {path}")
 
 
     def copy_to_bruto(self):
@@ -2105,6 +2088,9 @@ class ColaboradoresApp:
         if not self.selected_pdf:
             messagebox.showwarning("Aviso", "Selecione um PDF primeiro.")
             return
+        self._start_user_console("Pré-análise do arquivo selecionado")
+        self._log("Lendo estrutura inicial do PDF...")
+        
         try:
             result = pre_analyze_pdf(self.selected_pdf)
             self._log("Pré-análise concluída.")
@@ -2121,26 +2107,55 @@ class ColaboradoresApp:
             messagebox.showwarning("Aviso", "Selecione um PDF primeiro.")
             return
         try:
-            self._log(f"Arquivo selecionado: {self.selected_pdf}")
-            result = process_selected_pdf(self.selected_pdf, progress_callback=self._log)
+            self._start_user_console("Processamento em andamento")
+
+            last_public_progress = {"value": None}
+
+            def friendly_progress(raw_msg: str):
+                page_match = re.match(r"Lendo página (\d+) de (\d+)\.\.\.", raw_msg)
+                if page_match:
+                    current = int(page_match.group(1))
+                    total = int(page_match.group(2))
+
+                    if current == 1:
+                        self._log(f"Lendo páginas do PDF: {current}/{total}")
+                    elif current == total:
+                        self._log(f"Lendo páginas do PDF: {current}/{total}")
+                    elif current % 5 == 0:
+                        self._log(f"Lendo páginas do PDF: {current}/{total}")
+                    return
+
+                mapping = {
+                    "Iniciando análise das páginas...": "Analisando o documento...",
+                    "Coletando listas...": "Separando listas identificadas...",
+                    "Montando blocos de prova...": "Organizando blocos de prova...",
+                    "Definindo colaborador principal...": "Identificando o colaborador principal...",
+                    "Preparando pasta de saída...": "Preparando a pasta de saída...",
+                    "Pareando listas e provas...": "Relacionando listas e provas...",
+                    "Exportando PDFs finais...": "Gerando os PDFs automáticos...",
+                    "Gravando relatórios...": "Atualizando relatórios...",
+                }
+
+                public_msg = mapping.get(raw_msg)
+                if public_msg and public_msg != last_public_progress["value"]:
+                    last_public_progress["value"] = public_msg
+                    self._log(public_msg)
+
+            result = process_selected_pdf(self.selected_pdf, progress_callback=friendly_progress)
             self.last_result = result
             self.last_output_dir = result.output_dir
             total_gerados = len(result.auto_export_pairs)
             total_pendentes = len(result.manual_review_pairs)
             self._log("")
-            self._log("Processamento concluído com sucesso.")
-            self._log(f"Colaborador: {result.collaborator_name}")
-            self._log(f"Total de páginas: {result.total_pages}")
+            self._log("Resumo do processamento:")
+            self._log(f"Colaborador identificado: {result.collaborator_name}")
             self._log(f"Listas encontradas: {len(result.lists_found)}")
             self._log(f"Provas encontradas: {len(result.exams_found)}")
-            self._log(f"Arquivos gerados automaticamente: {total_gerados}")
+            self._log(f"PDFs automáticos gerados: {total_gerados}")
             self._log(f"Pendências para revisão manual: {total_pendentes}")
-            self._log(f"Avisos: {len(result.warnings)}")
-            self._log(f"Erros: {len(result.errors)}")
+            self._log(f"Relatório principal: {Path(result.report_txt_path).name}")
+            self._log(f"Resumo da execução: {Path(result.report_csv_path).with_suffix('.xlsx').name}")
             self._log(f"Pasta de saída: {result.output_dir}")
-            self._log(f"Relatório TXT: {result.report_txt_path}")
-            self._log(f"Resumo CSV: {result.report_csv_path}")
-            self._log(f"Resumo XLSX: {Path(result.report_csv_path).with_suffix('.xlsx')}")
             messagebox.showinfo(
                 "Concluído",
                 f"Processamento concluído.\n\n"
@@ -2168,6 +2183,7 @@ class ColaboradoresApp:
         list_preview_zoom = 1.35
         candidate_preview_zoom = 1.35
         candidate_preview_page_index = 0
+        fit_after_id = None
 
         win = tk.Toplevel(self.root)
         win.title("Revisão manual assistida")
@@ -2175,8 +2191,8 @@ class ColaboradoresApp:
         screen_w = win.winfo_screenwidth()
         screen_h = win.winfo_screenheight()
 
-        window_w = min(1280, max(860, int(screen_w * 0.92)))
-        window_h = min(900, max(640, int(screen_h * 0.88)))
+        window_w = min(screen_w - 30, max(980, int(screen_w * 0.94)))
+        window_h = min(screen_h - 40, max(760, int(screen_h * 0.94)))
 
         if window_w > screen_w - 40:
             window_w = screen_w - 40
@@ -2189,6 +2205,7 @@ class ColaboradoresApp:
 
         win.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
         win.resizable(True, True)
+        preview_canvas_height = max(420, int(window_h * 0.58))
 
         container = ttk.Frame(win)
         container.pack(fill="both", expand=True)
@@ -2233,18 +2250,8 @@ class ColaboradoresApp:
         title_var = tk.StringVar()
         summary_var = tk.StringVar()
 
-        progress_total_var = tk.StringVar()
-        progress_decided_var = tk.StringVar()
-        progress_remaining_var = tk.StringVar()
-        progress_confirmed_var = tk.StringVar()
-        progress_no_match_var = tk.StringVar()
-        progress_exported_var = tk.StringVar()
+        progress_line_var = tk.StringVar()
 
-        compact_info_var = tk.StringVar()
-
-        list_var = tk.StringVar()
-        pair_var = tk.StringVar()
-        candidate_var = tk.StringVar()
         list_preview_meta_var = tk.StringVar()
         candidate_preview_meta_var = tk.StringVar()
         action_var = tk.StringVar(value="Nenhuma ação manual realizada nesta pendência.")
@@ -2255,64 +2262,41 @@ class ColaboradoresApp:
         ttk.Label(
             main,
             textvariable=title_var,
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(0, 4))
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 0))
 
         ttk.Label(
             main,
             textvariable=summary_var,
             justify="left",
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 2))
         
-        progress_frame = ttk.LabelFrame(main, text="Progresso da revisão", padding=10)
-        progress_frame.pack(fill="x", pady=(0, 10))
-        
-        compact_info_frame = ttk.LabelFrame(main, text="Resumo atual", padding=8)
-        compact_info_frame.pack(fill="x", pady=(0, 10))
+        progress_frame = ttk.LabelFrame(main, text="Progresso", padding=3)
+        progress_frame.pack(fill="x", pady=(0, 3))
 
         ttk.Label(
-            compact_info_frame,
-            textvariable=compact_info_var,
+            progress_frame,
+            textvariable=progress_line_var,
             justify="left",
         ).pack(anchor="w")
-        
+
         controls_frame = ttk.Frame(main)
-        controls_frame.pack(fill="x", pady=(0, 10))
+        controls_frame.pack(fill="x", pady=(0, 3))
+        controls_frame.columnconfigure(0, weight=2)
+        controls_frame.columnconfigure(1, weight=3)
+        controls_frame.columnconfigure(2, weight=2)
 
-        navigation_frame = ttk.LabelFrame(controls_frame, text="Navegação", padding=8)
-        navigation_frame.pack(fill="x", pady=(0, 8))
+        navigation_frame = ttk.LabelFrame(controls_frame, text="Navegação", padding=4)
+        navigation_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        top_actions_row = ttk.Frame(controls_frame)
-        top_actions_row.pack(fill="x")
+        actions = ttk.LabelFrame(controls_frame, text="Ações", padding=3)
+        actions.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
 
-        for col in range(6):
-            progress_frame.columnconfigure(col, weight=1)
-
-        def create_progress_box(parent, col, title, value_var):
-            box = ttk.Frame(parent, padding=(8, 4))
-            box.grid(row=0, column=col, sticky="ew", padx=4, pady=2)
-
-            ttk.Label(
-                box,
-                text=title,
-                font=("Segoe UI", 9, "bold"),
-            ).pack(anchor="center")
-
-            ttk.Label(
-                box,
-                textvariable=value_var,
-                font=("Segoe UI", 10),
-            ).pack(anchor="center", pady=(2, 0))
-
-        create_progress_box(progress_frame, 0, "Total", progress_total_var)
-        create_progress_box(progress_frame, 1, "Decididas", progress_decided_var)
-        create_progress_box(progress_frame, 2, "Faltam", progress_remaining_var)
-        create_progress_box(progress_frame, 3, "Confirmadas", progress_confirmed_var)
-        create_progress_box(progress_frame, 4, "Sem correspondência", progress_no_match_var)
-        create_progress_box(progress_frame, 5, "Exportadas", progress_exported_var)
+        code_frame = ttk.LabelFrame(controls_frame, text="Código final", padding=3)
+        code_frame.grid(row=0, column=2, sticky="nsew")
         
         preview_container = ttk.Frame(main)
-        preview_container.pack(fill="both", expand=True, pady=(0, 10))
+        preview_container.pack(fill="both", expand=True, pady=(0, 2))
 
         preview_container.columnconfigure(0, weight=1, uniform="preview")
         preview_container.columnconfigure(1, weight=1, uniform="preview")
@@ -2331,6 +2315,7 @@ class ColaboradoresApp:
             list_preview_area,
             highlightthickness=1,
             background="white",
+            height=preview_canvas_height,
         )
         list_preview_vscroll = ttk.Scrollbar(
             list_preview_area,
@@ -2353,7 +2338,7 @@ class ColaboradoresApp:
         list_preview_canvas.pack(side="left", fill="both", expand=True)
         
         list_preview_actions = ttk.Frame(list_preview_frame)
-        list_preview_actions.pack(fill="x", pady=(8, 0))
+        list_preview_actions.pack(fill="x", pady=(4, 0))
 
         candidate_preview_area = ttk.Frame(candidate_preview_frame)
         candidate_preview_area.pack(fill="both", expand=True)
@@ -2362,6 +2347,7 @@ class ColaboradoresApp:
             candidate_preview_area,
             highlightthickness=1,
             background="white",
+            height=preview_canvas_height,
         )
         candidate_preview_vscroll = ttk.Scrollbar(
             candidate_preview_area,
@@ -2384,25 +2370,16 @@ class ColaboradoresApp:
         candidate_preview_canvas.pack(side="left", fill="both", expand=True)
         
         candidate_preview_actions = ttk.Frame(candidate_preview_frame)
-        candidate_preview_actions.pack(fill="x", pady=(8, 0))
+        candidate_preview_actions.pack(fill="x", pady=(4, 0))
 
-        nav_review = ttk.Frame(navigation_frame)
-        nav_review.pack(fill="x", pady=(0, 4))
-
-        nav_candidate = ttk.Frame(navigation_frame)
-        nav_candidate.pack(fill="x")
-
-        actions = ttk.LabelFrame(top_actions_row, text="Ações da revisão manual", padding=10)
-        actions.pack(side="left", fill="both", expand=True, padx=(0, 6))
-
-        code_frame = ttk.LabelFrame(top_actions_row, text="Código final do PDF", padding=10)
-        code_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        nav_row = ttk.Frame(navigation_frame)
+        nav_row.pack(fill="x")
 
         ttk.Label(
             code_frame,
-            text="Use este campo quando o código final precisar ser corrigido manualmente.",
+            text="Corrija o código, se necessário.",
             justify="left",
-        ).pack(anchor="w", pady=(0, 6))
+        ).pack(anchor="w", pady=(0, 2))
 
         code_entry_row = ttk.Frame(code_frame)
         code_entry_row.pack(fill="x")
@@ -2410,14 +2387,11 @@ class ColaboradoresApp:
         code_entry = ttk.Entry(code_entry_row, textvariable=code_var)
         code_entry.pack(side="left", fill="x", expand=True)
 
-        code_buttons_row = ttk.Frame(code_frame)
-        code_buttons_row.pack(fill="x", pady=(8, 0))
-
         ttk.Label(
             actions,
             textvariable=action_var,
             justify="left",
-        ).pack(anchor="w", pady=(0, 6))
+        ).pack(anchor="w", pady=(0, 3))
 
         action_buttons = ttk.Frame(actions)
         action_buttons.pack(fill="x")
@@ -2426,16 +2400,10 @@ class ColaboradoresApp:
             actions,
             textvariable=export_hint_var,
             justify="left",
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
         footer = ttk.Frame(main)
-        footer.pack(fill="x")
-
-        def set_text(widget: tk.Text, lines: List[str]):
-            widget.configure(state="normal")
-            widget.delete("1.0", "end")
-            widget.insert("1.0", "\n".join(lines))
-            widget.configure(state="disabled")
+        footer.pack(fill="x", pady=(2, 0))
 
         def get_current_item() -> ManualReviewItem:
             return items[review_index]
@@ -2445,6 +2413,16 @@ class ColaboradoresApp:
             if not item.candidate_exam_blocks:
                 return None
             return item.candidate_exam_blocks[candidate_index]
+        
+        def get_reserved_candidate_index(item: ManualReviewItem) -> int:
+            if item.reserved_exam_start_page is None:
+                return 0
+
+            for idx, exam in enumerate(item.candidate_exam_blocks):
+                if exam.start_page == item.reserved_exam_start_page:
+                    return idx
+
+            return 0
         
         def get_current_candidate_preview_page_number() -> Optional[int]:
             candidate = get_current_candidate()
@@ -2493,6 +2471,8 @@ class ColaboradoresApp:
         bind_preview_pan(candidate_preview_canvas)
         bind_preview_mouse_controls(list_preview_canvas, "list")
         bind_preview_mouse_controls(candidate_preview_canvas, "candidate")
+        list_preview_canvas.bind("<Configure>", lambda event: schedule_fit_previews())
+        candidate_preview_canvas.bind("<Configure>", lambda event: schedule_fit_previews())
 
         def change_list_preview_zoom(delta: float):
             nonlocal list_preview_zoom
@@ -2538,16 +2518,25 @@ class ColaboradoresApp:
 
             try:
                 list_preview_canvas.update_idletasks()
-                visible_width = max(200, list_preview_canvas.winfo_width() - 20)
+                visible_width = max(
+                    200,
+                    list_preview_canvas.winfo_width() - list_preview_vscroll.winfo_width() - 12
+                )
+
+                if visible_width <= 220:
+                    return
+
                 pdf_width, _ = get_pdf_page_size(
                     self.last_result.input_pdf_path,
                     item.list_record.page_number,
                 )
-                new_zoom = round(visible_width / pdf_width, 2)
-                list_preview_zoom = max(0.8, min(4.0, new_zoom))
-                render_current_review()
-            except Exception as exc:
-                messagebox.showerror("Pré-visualização", f"Não foi possível ajustar a lista à largura.\n\n{exc}")
+                new_zoom = max(0.8, min(4.0, round(visible_width / pdf_width, 2)))
+
+                if abs(list_preview_zoom - new_zoom) >= 0.05:
+                    list_preview_zoom = new_zoom
+                    render_current_review()
+            except Exception:
+                pass
 
 
         def fit_candidate_preview_to_width():
@@ -2559,16 +2548,42 @@ class ColaboradoresApp:
 
             try:
                 candidate_preview_canvas.update_idletasks()
-                visible_width = max(200, candidate_preview_canvas.winfo_width() - 20)
+                visible_width = max(
+                    200,
+                    candidate_preview_canvas.winfo_width() - candidate_preview_vscroll.winfo_width() - 12
+                )
+
+                if visible_width <= 220:
+                    return
+
                 pdf_width, _ = get_pdf_page_size(
                     self.last_result.input_pdf_path,
                     page_number,
                 )
-                new_zoom = round(visible_width / pdf_width, 2)
-                candidate_preview_zoom = max(0.8, min(4.0, new_zoom))
-                render_current_review()
-            except Exception as exc:
-                messagebox.showerror("Pré-visualização", f"Não foi possível ajustar a prova à largura.\n\n{exc}")
+                new_zoom = max(0.8, min(4.0, round(visible_width / pdf_width, 2)))
+
+                if abs(candidate_preview_zoom - new_zoom) >= 0.05:
+                    candidate_preview_zoom = new_zoom
+                    render_current_review()
+            except Exception:
+                pass
+                
+        def schedule_fit_previews():
+            nonlocal fit_after_id
+
+            def _fit_all():
+                nonlocal fit_after_id
+                fit_after_id = None
+                fit_list_preview_to_width()
+                fit_candidate_preview_to_width()
+
+            if fit_after_id is not None:
+                try:
+                    win.after_cancel(fit_after_id)
+                except Exception:
+                    pass
+
+            fit_after_id = win.after(120, _fit_all)
         
         def set_preview_canvas_image(canvas_widget: tk.Canvas, pil_image: Optional[Image.Image], empty_text: str):
             canvas_widget.delete("all")
@@ -2647,77 +2662,7 @@ class ColaboradoresApp:
                 )
             else:
                 candidate_preview_meta_var.set("Sem página de prova disponível.")
-            
-        def open_large_preview_window(title: str, page_number: Optional[int]):
-            if not page_number:
-                messagebox.showinfo("Pré-visualização", "Não há página disponível para ampliar.")
-                return
 
-            popup = tk.Toplevel(win)
-            popup.title(title)
-
-            screen_w = popup.winfo_screenwidth()
-            screen_h = popup.winfo_screenheight()
-
-            popup_w = min(1400, max(900, int(screen_w * 0.82)))
-            popup_h = min(1000, max(700, int(screen_h * 0.88)))
-
-            pos_x = max(0, (screen_w - popup_w) // 2)
-            pos_y = max(0, (screen_h - popup_h) // 2)
-
-            popup.geometry(f"{popup_w}x{popup_h}+{pos_x}+{pos_y}")
-            popup.resizable(True, True)
-
-            frame = ttk.Frame(popup, padding=10)
-            frame.pack(fill="both", expand=True)
-
-            try:
-                image = render_pdf_page_preview(
-                    input_pdf_path=self.last_result.input_pdf_path,
-                    page_number=page_number,
-                    max_size=(popup_w - 60, popup_h - 120),
-                    zoom=2.6,
-                )
-            except Exception as exc:
-                messagebox.showerror("Pré-visualização", f"Não foi possível abrir a página ampliada.\n\n{exc}")
-                popup.destroy()
-                return
-
-            photo = ImageTk.PhotoImage(image)
-
-            preview_label = ttk.Label(frame, image=photo, anchor="center")
-            preview_label.image = photo
-            preview_label.pack(fill="both", expand=True)
-
-            footer = ttk.Frame(frame)
-            footer.pack(fill="x", pady=(8, 0))
-
-            ttk.Label(footer, text=f"Página exibida: {page_number}").pack(side="left")
-            ttk.Button(footer, text="Fechar", command=popup.destroy).pack(side="right")
-
-
-        def open_current_list_preview_window():
-            item = get_current_item()
-            if not item.list_record:
-                messagebox.showinfo("Pré-visualização", "A pendência atual não possui página de lista.")
-                return
-
-            open_large_preview_window(
-                title=f"Lista ampliada — página {item.list_record.page_number}",
-                page_number=item.list_record.page_number,
-            )
-
-
-        def open_current_candidate_preview_window():
-            candidate = get_current_candidate()
-            if not candidate:
-                messagebox.showinfo("Pré-visualização", "Não há prova candidata disponível para ampliar.")
-                return
-
-            open_large_preview_window(
-                title=f"Prova ampliada — página {candidate.start_page}",
-                page_number=candidate.start_page,
-            )
         
         def update_manual_review_progress_vars():
             total = len(items)
@@ -2728,12 +2673,10 @@ class ColaboradoresApp:
             decided = confirmed + no_match
             remaining = total - decided
 
-            progress_total_var.set(str(total))
-            progress_decided_var.set(str(decided))
-            progress_remaining_var.set(str(remaining))
-            progress_confirmed_var.set(str(confirmed))
-            progress_no_match_var.set(str(no_match))
-            progress_exported_var.set(str(exported))
+            progress_line_var.set(
+                f"Total: {total}   |   Decididas: {decided}   |   Faltam: {remaining}   |   "
+                f"Confirmadas: {confirmed}   |   Sem correspondência: {no_match}   |   Exportadas: {exported}"
+            )
         
         def sync_item_logical_id(item: ManualReviewItem):
             if item.review_status == "SEM_CORRESPONDENCIA":
@@ -2760,40 +2703,6 @@ class ColaboradoresApp:
             sync_item_logical_id(item)
             render_current_review()
             
-        def apply_typed_code_and_stop(event=None):
-            apply_typed_code()
-            return "break"
-
-
-        def clear_typed_code_and_stop(event=None):
-            clear_typed_code()
-            return "break"
-        
-        code_entry.bind("<Return>", apply_typed_code_and_stop)
-        code_entry.bind("<KP_Enter>", apply_typed_code_and_stop)
-        
-        def is_focus_on_code_entry() -> bool:
-            return win.focus_get() == code_entry
-
-
-        def shortcut_if_not_typing(callback):
-            def _handler(event=None):
-                if is_focus_on_code_entry():
-                    return None
-                callback()
-                return "break"
-            return _handler
-
-
-        def export_shortcut(event=None):
-            if is_focus_on_code_entry():
-                return None
-
-            if btn_export_manual.instate(["disabled"]):
-                return "break"
-
-            export_all_manual_pdfs()
-            return "break"
             
         def clear_manual_export_state(item: ManualReviewItem):
             item.generated_output_file = None
@@ -2803,7 +2712,7 @@ class ColaboradoresApp:
             item.notes = [n for n in item.notes if n != note_to_remove]
             item.pair.notes = [n for n in item.pair.notes if n != note_to_remove]
             
-        def export_all_manual_pdfs():
+        def export_all_manual_pdfs(close_after_success: bool = False):
             pdfs_dir = str(Path(self.last_result.output_dir) / "pdfs")
             Path(pdfs_dir).mkdir(parents=True, exist_ok=True)
 
@@ -2817,27 +2726,38 @@ class ColaboradoresApp:
             write_reports(self.last_result)
 
             exported_count = len(result_export["exported"])
-            skipped_count = len(result_export["skipped"])
             error_count = len(result_export["errors"])
+            no_match_count = sum(1 for item in items if item.review_status == "SEM_CORRESPONDENCIA")
 
-            for path in result_export["exported"]:
-                self._log(f"PDF manual gerado: {path}")
+            self._log("Revisão manual finalizada.")
+            self._log(f"PDFs manuais gerados: {exported_count}")
+            self._log(f"Listas sem correspondência: {no_match_count}")
+            self._log(f"Erros na exportação manual: {error_count}")
 
-            for msg in result_export["skipped"]:
-                self._log(f"PDF manual não gerado: {msg}")
-
-            for msg in result_export["errors"]:
-                self._log(f"Erro na exportação manual: {msg}")
+            if error_count > 0:
+                messagebox.showerror(
+                    "Revisão manual",
+                    "A classificação foi concluída, mas houve erro(s) na geração automática.\n\n"
+                    f"PDFs gerados: {exported_count}\n"
+                    f"Sem correspondência: {no_match_count}\n"
+                    f"Erros: {error_count}"
+                )
+                render_current_review()
+                return False
 
             messagebox.showinfo(
                 "Revisão manual",
-                "Exportação manual concluída.\n\n"
-                f"Exportados: {exported_count}\n"
-                f"Não exportados: {skipped_count}\n"
-                f"Erros: {error_count}"
+                "Classificação concluída.\n\n"
+                f"PDFs gerados: {exported_count}\n"
+                f"Sem correspondência: {no_match_count}"
             )
 
-            render_current_review() 
+            if close_after_success:
+                win.destroy()
+            else:
+                render_current_review()
+
+            return True 
         
 
         def update_button_states():
@@ -2950,17 +2870,6 @@ class ColaboradoresApp:
             sync_item_logical_id(item)
             code_var.set(item.typed_logical_id or "")
 
-            if item.candidate_exam_blocks and item.reserved_exam_start_page is not None:
-                reserved_idx = next(
-                    (
-                        idx for idx, exam in enumerate(item.candidate_exam_blocks)
-                        if exam.start_page == item.reserved_exam_start_page
-                    ),
-                    None
-                )
-                if reserved_idx is not None:
-                    candidate_index = reserved_idx
-
             if item.candidate_exam_blocks:
                 candidate_index = max(0, min(candidate_index, len(item.candidate_exam_blocks) - 1))
             else:
@@ -2980,30 +2889,27 @@ class ColaboradoresApp:
             )
 
             summary_var.set(
-                f"Review ID: {item.review_id} | Status da revisão: {item.review_status}"
+                f"Status: {item.review_status} | Código final: {item.pair.logical_id or '-'}"
             )
 
             update_manual_review_progress_vars()
 
+            list_page = item.list_record.page_number if item.list_record else "-"
+            list_code = item.list_record.logical_id if item.list_record and item.list_record.logical_id else "-"
+
+            list_preview_frame.configure(
+                text=f"Lista — pág. {list_page} — código {list_code}"
+            )
+
             if candidate:
-                candidate_summary = (
-                    f"Prova: {candidate_index + 1} de {len(item.candidate_exam_blocks)}"
-                    f" | pág. inicial {candidate.start_page}"
-                    f" | código {candidate.logical_id or candidate.code or '-'}"
+                candidate_code = candidate.logical_id or candidate.code or "-"
+                candidate_preview_frame.configure(
+                    text=f"Prova — {candidate_index + 1}/{len(item.candidate_exam_blocks)} — pág. {candidate.start_page} — código {candidate_code}"
                 )
             else:
-                candidate_summary = "Prova: nenhuma candidata disponível"
-
-            generated_name = Path(item.generated_output_file).name if item.generated_output_file else "-"
-
-            compact_info_var.set(
-                "\n".join([
-                    f"Lista: pág. {item.list_record.page_number if item.list_record else '-'} | código {item.list_record.logical_id if item.list_record and item.list_record.logical_id else '-'}",
-                    candidate_summary,
-                    f"Revisão: {item.review_status} | prova confirmada: {item.confirmed_exam_start_page if item.confirmed_exam_start_page else '-'} | arquivo: {generated_name}",
-                    f"Código final do PDF: {item.pair.logical_id or '-'}",
-                ])
-            )
+                candidate_preview_frame.configure(
+                    text="Prova — nenhuma candidata disponível"
+                )
 
             if item.review_status == "CONFIRMADO_MANUAL":
                 action_var.set(
@@ -3015,15 +2921,16 @@ class ColaboradoresApp:
                 action_var.set("Nenhuma ação manual realizada nesta pendência.")
 
             update_button_states()
-
+            
         def change_review(step: int):
             nonlocal review_index, candidate_index, candidate_preview_page_index
             new_index = review_index + step
             if 0 <= new_index < len(items):
                 review_index = new_index
-                candidate_index = 0
+                candidate_index = get_reserved_candidate_index(items[review_index])
                 candidate_preview_page_index = 0
                 render_current_review()
+                schedule_fit_previews()
 
         def change_candidate(step: int):
             nonlocal candidate_index, candidate_preview_page_index
@@ -3036,6 +2943,7 @@ class ColaboradoresApp:
                 candidate_index = new_index
                 candidate_preview_page_index = 0
                 render_current_review()
+                win.after_idle(fit_candidate_preview_to_width)
 
         def move_to_next_review_after_decision():
             nonlocal review_index, candidate_index, candidate_preview_page_index
@@ -3043,9 +2951,22 @@ class ColaboradoresApp:
             if review_index < len(items) - 1:
                 review_index += 1
 
-            candidate_index = 0
+            candidate_index = get_reserved_candidate_index(items[review_index])
             candidate_preview_page_index = 0
             render_current_review()
+            schedule_fit_previews()
+            
+        def finish_manual_review_if_ready():
+            all_items_classified = all(
+                item.review_status in {"CONFIRMADO_MANUAL", "SEM_CORRESPONDENCIA"}
+                for item in items
+            )
+
+            if not all_items_classified:
+                move_to_next_review_after_decision()
+                return
+
+            export_all_manual_pdfs(close_after_success=True)
 
         def accept_current_candidate():
             item = get_current_item()
@@ -3061,7 +2982,7 @@ class ColaboradoresApp:
             item.pair.status = "MANUAL_CONFIRMADO"
             sync_item_logical_id(item)
 
-            move_to_next_review_after_decision()
+            finish_manual_review_if_ready()
 
         def reject_and_next_candidate():
             item = get_current_item()
@@ -3085,31 +3006,31 @@ class ColaboradoresApp:
             item.pair.status = "MANUAL_SEM_CORRESPONDENCIA"
             sync_item_logical_id(item)
 
-            move_to_next_review_after_decision()
+            finish_manual_review_if_ready()
 
         btn_prev_review = ttk.Button(
-            nav_review,
+            nav_row,
             text="Lista anterior",
             command=lambda: change_review(-1),
         )
         btn_prev_review.pack(side="left")
 
         btn_next_review = ttk.Button(
-            nav_review,
+            nav_row,
             text="Próxima lista",
             command=lambda: change_review(1),
         )
-        btn_next_review.pack(side="left", padx=6)
+        btn_next_review.pack(side="left", padx=(6, 12))
 
         btn_prev_candidate = ttk.Button(
-            nav_candidate,
+            nav_row,
             text="Prova anterior",
             command=lambda: change_candidate(-1),
         )
         btn_prev_candidate.pack(side="left")
 
         btn_next_candidate = ttk.Button(
-            nav_candidate,
+            nav_row,
             text="Próxima prova",
             command=lambda: change_candidate(1),
         )
@@ -3144,15 +3065,15 @@ class ColaboradoresApp:
         btn_export_manual.pack(side="left", padx=6)
         
         btn_apply_code = ttk.Button(
-            code_buttons_row,
-            text="Aplicar código digitado",
+            code_entry_row,
+            text="Aplicar",
             command=apply_typed_code,
         )
-        btn_apply_code.pack(side="left")
+        btn_apply_code.pack(side="left", padx=(6, 0))
 
         btn_clear_code = ttk.Button(
-            code_buttons_row,
-            text="Limpar código manual",
+            code_entry_row,
+            text="Limpar",
             command=clear_typed_code,
         )
         btn_clear_code.pack(side="left", padx=6)
@@ -3236,23 +3157,11 @@ class ColaboradoresApp:
             candidate_preview_actions,
             textvariable=candidate_preview_meta_var,
         ).pack(side="left", padx=12)
-        
-        win.bind("<Alt-Left>", shortcut_if_not_typing(lambda: change_review(-1)))
-        win.bind("<Alt-Right>", shortcut_if_not_typing(lambda: change_review(1)))
-
-        win.bind("<Control-Left>", shortcut_if_not_typing(lambda: change_candidate(-1)))
-        win.bind("<Control-Right>", shortcut_if_not_typing(lambda: change_candidate(1)))
-
-        win.bind("<F2>", apply_typed_code_and_stop)
-        win.bind("<F4>", clear_typed_code_and_stop)
-
-        win.bind("<Control-Return>", export_shortcut)
-        win.bind("<Control-KP_Enter>", export_shortcut)
 
         ttk.Button(footer, text="Fechar", command=win.destroy).pack(side="right")
 
         render_current_review()
-
+        schedule_fit_previews()
 
     def open_last_output(self):
         if not self.last_output_dir:
