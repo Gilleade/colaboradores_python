@@ -7,7 +7,9 @@ import re
 import sys
 import unicodedata
 import subprocess
+import threading
 import traceback
+import webbrowser
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,6 +50,19 @@ BASE_DIR = APP_DIR / "colaboradores_data"
 BRUTO_DIR = BASE_DIR / "bruto"
 PROCESSADO_DIR = BASE_DIR / "processado"
 OCR_LANG = "por"
+
+APP_NAME = "Separador de Listas e Provas"
+APP_VERSION = "1.0"
+
+AUTHOR_NAME = "Gilleade Gonçalves Silva"
+AUTHOR_EMAIL = "gilleadesilva@gmail.com"
+AUTHOR_LINKEDIN = "https://br.linkedin.com/in/gilleade-silva"
+AUTHOR_GITHUB = "https://github.com/Gilleade"
+
+AUTHOR_CREDIT_TEXT = (
+    f"Desenvolvido por {AUTHOR_NAME} | "
+    f"Contato: {AUTHOR_EMAIL}"
+)
 
 CODE_PATTERN = re.compile(r"\bPE-[0-9][A-Z&]+-[0-9]{5}\b", re.IGNORECASE)
 
@@ -263,7 +278,22 @@ def sanitize_filename(text: str) -> str:
     text = re.sub(r"\s+", "", text)
     return text.strip()
 
+def build_author_report_lines() -> List[str]:
+    return [
+        f"Ferramenta desenvolvida por: {AUTHOR_NAME}",
+        f"Contato: {AUTHOR_EMAIL}",
+    ]
 
+
+def build_about_text() -> str:
+    return (
+        f"{APP_NAME}\n"
+        f"Versão: {APP_VERSION}\n\n"
+        f"Desenvolvido por: {AUTHOR_NAME}\n"
+        f"E-mail: {AUTHOR_EMAIL}\n"
+        f"LinkedIn: {AUTHOR_LINKEDIN}\n"
+        f"GitHub: {AUTHOR_GITHUB}"
+    )
 
 def contains_any(text: str, terms: List[str]) -> bool:
     return any(term in text for term in terms)
@@ -1542,8 +1572,6 @@ def ensure_output_structure(collaborator_name: Optional[str]) -> Tuple[str, str,
     pdfs_dir.mkdir(parents=True, exist_ok=True)
     return str(run_output_dir), str(pdfs_dir), run_id
 
-
-
 def export_pair_pdf(input_pdf_path: str, pair: PairRecord, output_pdf_path: str) -> None:
     source_doc = fitz.open(input_pdf_path)
     out_doc = fitz.open()
@@ -1559,6 +1587,31 @@ def export_pair_pdf(input_pdf_path: str, pair: PairRecord, output_pdf_path: str)
     finally:
         out_doc.close()
         source_doc.close()
+        
+PREVIEW_IMAGE_CACHE: Dict[Tuple[str, int, float], Image.Image] = {}
+PREVIEW_PAGE_SIZE_CACHE: Dict[Tuple[str, int], Tuple[float, float]] = {}
+
+MAX_PREVIEW_IMAGE_CACHE = 48
+MAX_PREVIEW_PAGE_SIZE_CACHE = 256
+
+
+def _cache_put_image(key: Tuple[str, int, float], image: Image.Image) -> None:
+    PREVIEW_IMAGE_CACHE[key] = image
+    if len(PREVIEW_IMAGE_CACHE) > MAX_PREVIEW_IMAGE_CACHE:
+        oldest_key = next(iter(PREVIEW_IMAGE_CACHE))
+        PREVIEW_IMAGE_CACHE.pop(oldest_key, None)
+
+
+def _cache_put_page_size(key: Tuple[str, int], size: Tuple[float, float]) -> None:
+    PREVIEW_PAGE_SIZE_CACHE[key] = size
+    if len(PREVIEW_PAGE_SIZE_CACHE) > MAX_PREVIEW_PAGE_SIZE_CACHE:
+        oldest_key = next(iter(PREVIEW_PAGE_SIZE_CACHE))
+        PREVIEW_PAGE_SIZE_CACHE.pop(oldest_key, None)
+
+
+def clear_preview_caches() -> None:
+    PREVIEW_IMAGE_CACHE.clear()
+    PREVIEW_PAGE_SIZE_CACHE.clear()
 
 def render_pdf_page_preview(
     input_pdf_path: str,
@@ -1572,20 +1625,28 @@ def render_pdf_page_preview(
     if page_number < 1:
         raise ValueError("Número de página inválido para pré-visualização.")
 
-    doc = fitz.open(input_pdf_path)
-    try:
-        page = doc.load_page(page_number - 1)
-        matrix = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    normalized_path = str(Path(input_pdf_path).resolve())
+    cache_key = (normalized_path, page_number, round(float(zoom), 2))
 
-        if max_size:
-            resampling_module = getattr(Image, "Resampling", Image)
-            image.thumbnail(max_size, resampling_module.LANCZOS)
+    cached = PREVIEW_IMAGE_CACHE.get(cache_key)
+    if cached is not None:
+        image = cached.copy()
+    else:
+        doc = fitz.open(input_pdf_path)
+        try:
+            page = doc.load_page(page_number - 1)
+            matrix = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            _cache_put_image(cache_key, image.copy())
+        finally:
+            doc.close()
 
-        return image
-    finally:
-        doc.close()
+    if max_size:
+        resampling_module = getattr(Image, "Resampling", Image)
+        image.thumbnail(max_size, resampling_module.LANCZOS)
+
+    return image
         
 def get_pdf_page_size(input_pdf_path: str, page_number: int) -> Tuple[float, float]:
     if not input_pdf_path:
@@ -1594,11 +1655,20 @@ def get_pdf_page_size(input_pdf_path: str, page_number: int) -> Tuple[float, flo
     if page_number < 1:
         raise ValueError("Número de página inválido.")
 
+    normalized_path = str(Path(input_pdf_path).resolve())
+    cache_key = (normalized_path, page_number)
+
+    cached = PREVIEW_PAGE_SIZE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     doc = fitz.open(input_pdf_path)
     try:
         page = doc.load_page(page_number - 1)
         rect = page.rect
-        return float(rect.width), float(rect.height)
+        size = (float(rect.width), float(rect.height))
+        _cache_put_page_size(cache_key, size)
+        return size
     finally:
         doc.close()
 
@@ -1778,6 +1848,12 @@ def build_pair_summary_row(pair: PairRecord) -> Dict[str, str]:
 def build_report_lines(result: ProcessResult) -> List[str]:
     lines: List[str] = []
     summary = summarize_pair_workflow_buckets(result.pairs)
+    
+    lines.append(f"Sistema: {APP_NAME}")
+    lines.append(f"Versão: {APP_VERSION}")
+    for line in build_author_report_lines():
+        lines.append(line)
+    lines.append("")
 
     lines.append(f"Arquivo de entrada: {result.input_file}")
     lines.append(f"Colaborador identificado: {result.collaborator_name}")
@@ -1994,10 +2070,10 @@ class ColaboradoresApp:
         self.selected_pdf: Optional[str] = None
         self.last_output_dir: Optional[str] = None
         self.last_result: Optional[ProcessResult] = None
+        self.is_busy = False
         self._build_ui()
         self._log("Sistema pronto.")
         self._log("Selecione um PDF e use Pré-análise ou Processar.")
-
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=12)
@@ -2008,16 +2084,31 @@ class ColaboradoresApp:
         ttk.Label(row1, text="PDF selecionado:").pack(side="left")
         self.path_var = tk.StringVar(value="Nenhum arquivo selecionado")
         ttk.Entry(row1, textvariable=self.path_var).pack(side="left", fill="x", expand=True, padx=8)
-        ttk.Button(row1, text="Selecionar PDF", command=self.select_pdf).pack(side="left")
+        self.btn_select_pdf = ttk.Button(row1, text="Selecionar PDF", command=self.select_pdf)
+        self.btn_select_pdf.pack(side="left")
 
         row2 = ttk.Frame(main)
         row2.pack(fill="x", pady=(0, 10))
-        ttk.Button(row2, text="Copiar para pasta bruto", command=self.copy_to_bruto).pack(side="left")
-        ttk.Button(row2, text="Pré-análise", command=self.run_pre_analysis).pack(side="left", padx=6)
-        ttk.Button(row2, text="Processar", command=self.run_processing).pack(side="left")
-        ttk.Button(row2, text="Revisão manual", command=self.open_manual_review).pack(side="left", padx=6)
-        ttk.Button(row2, text="Abrir saída", command=self.open_last_output).pack(side="left", padx=6)
-        ttk.Button(row2, text="Abrir pasta base", command=lambda: open_in_file_manager(str(BASE_DIR))).pack(side="left")
+        self.btn_copy_bruto = ttk.Button(row2, text="Copiar para pasta bruto", command=self.copy_to_bruto)
+        self.btn_copy_bruto.pack(side="left")
+
+        self.btn_pre_analysis = ttk.Button(row2, text="Pré-análise", command=self.run_pre_analysis)
+        self.btn_pre_analysis.pack(side="left", padx=6)
+
+        self.btn_process = ttk.Button(row2, text="Processar", command=self.run_processing)
+        self.btn_process.pack(side="left")
+
+        self.btn_manual_review = ttk.Button(row2, text="Revisão manual", command=self.open_manual_review)
+        self.btn_manual_review.pack(side="left", padx=6)
+
+        self.btn_open_output = ttk.Button(row2, text="Abrir saída", command=self.open_last_output)
+        self.btn_open_output.pack(side="left", padx=6)
+
+        self.btn_open_base = ttk.Button(row2, text="Abrir pasta base", command=lambda: open_in_file_manager(str(BASE_DIR)))
+        self.btn_open_base.pack(side="left")
+
+        self.btn_about = ttk.Button(row2, text="Sobre o Sistema", command=self.show_about)
+        self.btn_about.pack(side="left", padx=6)
 
         info = ttk.Label(
             main,
@@ -2036,33 +2127,64 @@ class ColaboradoresApp:
         scrollbar.pack(side="right", fill="y")
         self.text.configure(yscrollcommand=scrollbar.set)
 
-
     def _log(self, message: str):
         self.text.insert("end", message + "\n")
         self.text.see("end")
         self.root.update_idletasks()
-        
-    
+            
     def _clear_log(self):
         self.text.delete("1.0", "end")
         self.root.update_idletasks()
-
 
     def _start_user_console(self, title: str):
         self._clear_log()
         self._log(title)
         if self.selected_pdf:
             self._log(f"Arquivo: {Path(self.selected_pdf).name}")
-        self._log("")
+        self._log("") 
+        
+    def _set_busy_state(self, busy: bool):
+        self.is_busy = busy
+        state = "disabled" if busy else "normal"
 
+        widgets = [
+            getattr(self, "btn_select_pdf", None),
+            getattr(self, "btn_copy_bruto", None),
+            getattr(self, "btn_pre_analysis", None),
+            getattr(self, "btn_process", None),
+            getattr(self, "btn_manual_review", None),
+            getattr(self, "btn_open_output", None),
+            getattr(self, "btn_open_base", None),
+        ]
+
+        for widget in widgets:
+            if widget is not None:
+                try:
+                    widget.configure(state=state)
+                except Exception:
+                    pass
+
+        try:
+            self.root.configure(cursor="watch" if busy else "")
+        except Exception:
+            pass
+
+        self.root.update_idletasks()
+
+    def _ui_call(self, callback, *args, **kwargs):
+        self.root.after(0, lambda: callback(*args, **kwargs))
 
     def select_pdf(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
+            return
         path = filedialog.askopenfilename(
             title="Selecione o PDF",
             filetypes=[("PDF", "*.pdf"), ("Todos os arquivos", "*.*")],
             initialdir=str(BRUTO_DIR if BRUTO_DIR.exists() else APP_DIR),
         )
         if path:
+            clear_preview_caches()
             self.selected_pdf = path
             self.path_var.set(path)
             self._clear_log()
@@ -2070,8 +2192,10 @@ class ColaboradoresApp:
             self._log(f"Arquivo: {Path(path).name}")
             self._log(f"Local: {path}")
 
-
     def copy_to_bruto(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
+            return
         if not self.selected_pdf:
             messagebox.showwarning("Aviso", "Selecione um PDF primeiro.")
             return
@@ -2085,67 +2209,93 @@ class ColaboradoresApp:
 
 
     def run_pre_analysis(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
+            return
+
         if not self.selected_pdf:
             messagebox.showwarning("Aviso", "Selecione um PDF primeiro.")
             return
+
+        selected_pdf = self.selected_pdf
         self._start_user_console("Pré-análise do arquivo selecionado")
         self._log("Lendo estrutura inicial do PDF...")
-        
-        try:
-            result = pre_analyze_pdf(self.selected_pdf)
+        self._set_busy_state(True)
+
+        def finish_success(result: PreAnalysisResult):
             self._log("Pré-análise concluída.")
             self._log(f"Arquivo: {result.file_name}")
             self._log(f"Páginas: {result.total_pages}")
             self._log(f"Provavelmente escaneado: {'Sim' if result.is_probably_scanned else 'Não'}")
-        except Exception as exc:
+            self._set_busy_state(False)
+
+        def finish_error(exc: Exception):
             self._log(f"Erro na pré-análise: {exc}")
+            self._set_busy_state(False)
             messagebox.showerror("Erro", str(exc))
+
+        def worker():
+            try:
+                result = pre_analyze_pdf(selected_pdf)
+                self._ui_call(finish_success, result)
+            except Exception as exc:
+                self._ui_call(finish_error, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
     def run_processing(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
+            return
+
         if not self.selected_pdf:
             messagebox.showwarning("Aviso", "Selecione um PDF primeiro.")
             return
-        try:
-            self._start_user_console("Processamento em andamento")
 
-            last_public_progress = {"value": None}
+        selected_pdf = self.selected_pdf
+        self._start_user_console("Processamento em andamento")
+        self._set_busy_state(True)
 
-            def friendly_progress(raw_msg: str):
-                page_match = re.match(r"Lendo página (\d+) de (\d+)\.\.\.", raw_msg)
-                if page_match:
-                    current = int(page_match.group(1))
-                    total = int(page_match.group(2))
+        last_public_progress = {"value": None}
 
-                    if current == 1:
-                        self._log(f"Lendo páginas do PDF: {current}/{total}")
-                    elif current == total:
-                        self._log(f"Lendo páginas do PDF: {current}/{total}")
-                    elif current % 5 == 0:
-                        self._log(f"Lendo páginas do PDF: {current}/{total}")
-                    return
+        def safe_log(message: str):
+            self._ui_call(self._log, message)
 
-                mapping = {
-                    "Iniciando análise das páginas...": "Analisando o documento...",
-                    "Coletando listas...": "Separando listas identificadas...",
-                    "Montando blocos de prova...": "Organizando blocos de prova...",
-                    "Definindo colaborador principal...": "Identificando o colaborador principal...",
-                    "Preparando pasta de saída...": "Preparando a pasta de saída...",
-                    "Pareando listas e provas...": "Relacionando listas e provas...",
-                    "Exportando PDFs finais...": "Gerando os PDFs automáticos...",
-                    "Gravando relatórios...": "Atualizando relatórios...",
-                }
+        def friendly_progress(raw_msg: str):
+            page_match = re.match(r"Lendo página (\d+) de (\d+)\.\.\.", raw_msg)
+            if page_match:
+                current = int(page_match.group(1))
+                total = int(page_match.group(2))
 
-                public_msg = mapping.get(raw_msg)
-                if public_msg and public_msg != last_public_progress["value"]:
-                    last_public_progress["value"] = public_msg
-                    self._log(public_msg)
+                if current == 1 or current == total or current % 5 == 0:
+                    safe_log(f"Lendo páginas do PDF: {current}/{total}")
+                return
 
-            result = process_selected_pdf(self.selected_pdf, progress_callback=friendly_progress)
+            mapping = {
+                "Iniciando análise das páginas...": "Analisando o documento...",
+                "Coletando listas...": "Separando listas identificadas...",
+                "Montando blocos de prova...": "Organizando blocos de prova...",
+                "Definindo colaborador principal...": "Identificando o colaborador principal...",
+                "Preparando pasta de saída...": "Preparando a pasta de saída...",
+                "Pareando listas e provas...": "Relacionando listas e provas...",
+                "Exportando PDFs finais...": "Gerando os PDFs automáticos...",
+                "Gravando relatórios...": "Atualizando relatórios...",
+            }
+
+            public_msg = mapping.get(raw_msg)
+            if public_msg and public_msg != last_public_progress["value"]:
+                last_public_progress["value"] = public_msg
+                safe_log(public_msg)
+
+        def finish_success(result: ProcessResult):
+            clear_preview_caches()
             self.last_result = result
             self.last_output_dir = result.output_dir
+
             total_gerados = len(result.auto_export_pairs)
             total_pendentes = len(result.manual_review_pairs)
+
             self._log("")
             self._log("Resumo do processamento:")
             self._log(f"Colaborador identificado: {result.collaborator_name}")
@@ -2156,19 +2306,37 @@ class ColaboradoresApp:
             self._log(f"Relatório principal: {Path(result.report_txt_path).name}")
             self._log(f"Resumo da execução: {Path(result.report_csv_path).with_suffix('.xlsx').name}")
             self._log(f"Pasta de saída: {result.output_dir}")
+
+            self._set_busy_state(False)
+
             messagebox.showinfo(
                 "Concluído",
                 f"Processamento concluído.\n\n"
                 f"Arquivos gerados automaticamente: {total_gerados}\n"
                 f"Pendências para revisão manual: {total_pendentes}"
             )
-        except Exception as exc:
+
+        def finish_error(exc: Exception, tb_text: str):
             self._log(f"Erro durante o processamento: {exc}")
-            self._log(traceback.format_exc())
+            self._log(tb_text)
+            self._set_busy_state(False)
             messagebox.showerror("Erro", str(exc))
+
+        def worker():
+            try:
+                result = process_selected_pdf(selected_pdf, progress_callback=friendly_progress)
+                self._ui_call(finish_success, result)
+            except Exception as exc:
+                tb_text = traceback.format_exc()
+                self._ui_call(finish_error, exc, tb_text)
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
     def open_manual_review(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Finalize a operação atual antes de abrir a revisão manual.")
+            return
         if not self.last_result:
             messagebox.showinfo("Revisão manual", "Processe um PDF antes de abrir a revisão manual.")
             return
@@ -3162,8 +3330,82 @@ class ColaboradoresApp:
 
         render_current_review()
         schedule_fit_previews()
+        
+    def show_about(self):
+        win = tk.Toplevel(self.root)
+        win.title("Sobre o sistema")
+        win.geometry("520x260")
+        win.resizable(False, False)
+
+        screen_w = win.winfo_screenwidth()
+        screen_h = win.winfo_screenheight()
+        pos_x = max(0, (screen_w - 520) // 2)
+        pos_y = max(0, (screen_h - 260) // 2)
+        win.geometry(f"520x260+{pos_x}+{pos_y}")
+
+        main = ttk.Frame(win, padding=12)
+        main.pack(fill="both", expand=True)
+
+        ttk.Label(
+            main,
+            text=APP_NAME,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 4))
+
+        ttk.Label(
+            main,
+            text=f"Versão: {APP_VERSION}",
+        ).pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(
+            main,
+            text=f"Desenvolvido por: {AUTHOR_NAME}",
+            justify="left",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            main,
+            text=f"E-mail: {AUTHOR_EMAIL}",
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            main,
+            text=f"LinkedIn: {AUTHOR_LINKEDIN}",
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            main,
+            text=f"GitHub: {AUTHOR_GITHUB}",
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        buttons = ttk.Frame(main)
+        buttons.pack(fill="x", pady=(8, 0))
+
+        ttk.Button(
+            buttons,
+            text="Abrir LinkedIn",
+            command=lambda: webbrowser.open(AUTHOR_LINKEDIN),
+        ).pack(side="left")
+
+        ttk.Button(
+            buttons,
+            text="Abrir GitHub",
+            command=lambda: webbrowser.open(AUTHOR_GITHUB),
+        ).pack(side="left", padx=6)
+
+        ttk.Button(
+            buttons,
+            text="Fechar",
+            command=win.destroy,
+        ).pack(side="right")
 
     def open_last_output(self):
+        if self.is_busy:
+            messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
+            return
         if not self.last_output_dir:
             messagebox.showinfo("Saída", "Ainda não há pasta de saída desta sessão.")
             return
