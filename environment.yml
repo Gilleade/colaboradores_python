@@ -1,4 +1,4 @@
-name: wave-analysis
+name: colaboradores-python
 channels:
   - conda-forge
   - defaults

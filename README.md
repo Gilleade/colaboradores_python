@@ -94,7 +94,7 @@ Arquivo de especificação do **PyInstaller**. Ele pode servir como base para aj
 > Observação: no fluxo atual, o script `gerar_exe_pyinstaller.bat` remove o `.spec` anterior e executa o empacotamento por linha de comando. Ainda assim, manter esse arquivo no repositório continua sendo útil como referência.
 
 #### `environment.yml`
-Arquivo de ambiente **Conda** recomendado para desenvolvimento e geração do executável em máquina de trabalho. Ele centraliza as dependências Python do projeto e reduz a necessidade de instalações manuais avulsas.
+Arquivo de ambiente **Conda** recomendado exclusivamente para este projeto, voltado ao desenvolvimento e à geração do executável em máquina de trabalho. Ele centraliza as dependências Python do projeto e evita misturar este sistema com ambientes de outros projetos.
 
 > Observação: o `environment.yml` prepara o ambiente Python, mas não substitui a necessidade do Tesseract disponível na pasta `tesseract` ou no `PATH`, conforme o modo de uso adotado.
 
@@ -129,7 +129,7 @@ Script simples para iniciar a aplicação. Ele tenta:
 Para rodar o projeto a partir do código-fonte, recomenda-se:
 
 - Miniconda ou Anaconda instalado na máquina de desenvolvimento;
-- uso do ambiente definido em `environment.yml`;
+- uso de um ambiente Conda separado e exclusivo para este projeto, definido em `environment.yml`;
 - Tesseract OCR disponível:
   - na pasta `tesseract` ao lado do projeto, **ou**
   - instalado e acessível pelo `PATH` do sistema;
@@ -146,7 +146,7 @@ conda env create -f environment.yml
 Depois, ative o ambiente:
 
 ```bash
-conda activate wave-analysis
+conda activate colaboradores-python
 ```
 
 Se o ambiente já existir e você quiser sincronizá-lo novamente com o arquivo:
@@ -157,7 +157,7 @@ conda env update -f environment.yml --prune
 
 ### O que o `environment.yml` cobre
 
-O arquivo foi preparado para centralizar o ambiente Python do projeto, incluindo:
+O arquivo foi preparado para centralizar um ambiente Python separado para este projeto, incluindo:
 
 - Python;
 - Tk;
@@ -264,7 +264,7 @@ Nesse modo, a aplicação processa o documento e imprime no console:
 No Windows, dentro da pasta do projeto, ative o ambiente:
 
 ```powershell
-conda activate wave-analysis
+conda activate colaboradores-python
 ```
 
 ### 2. Executar o script de build
