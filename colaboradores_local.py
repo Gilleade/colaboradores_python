@@ -20,6 +20,7 @@ from difflib import SequenceMatcher
 
 from license_validator import (
     LicenseValidationError,
+    LicenseValidationResult,
     get_current_machine_id,
     save_activation_request,
     validate_license,
@@ -2072,10 +2073,11 @@ def process_selected_pdf(file_path: str, progress_callback: Optional[Callable[[s
 # ============================================================
 
 class ColaboradoresApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, license_info: Optional[LicenseValidationResult] = None):
         self.root = root
+        self.license_info = license_info
         self.root.title("Separador de Listas e Provas")
-        self.root.geometry("900x620")
+        self.root.geometry("900x560")
         self.selected_pdf: Optional[str] = None
         self.last_output_dir: Optional[str] = None
         self.last_result: Optional[ProcessResult] = None
@@ -2083,6 +2085,26 @@ class ColaboradoresApp:
         self._build_ui()
         self._log("Sistema pronto.")
         self._log("Selecione um PDF e use Pré-análise ou Processar.")
+
+    def build_license_summary_text(self) -> str:
+        if not self.license_info:
+            return "Licença: informação indisponível"
+
+        if self.license_info.license_type == "perpetual":
+            validity_text = "Vitalícia"
+        else:
+            validity_text = self.license_info.expires_at or "Não informado"
+
+        binding_text = "Sim" if self.license_info.machine_bound else "Não"
+
+        return (
+            f"Licenciado para: {self.license_info.customer_name}\n"
+            f"Escopo: {self.license_info.customer_type}\n"
+            f"Tipo de licença: {self.license_info.license_type}\n"
+            f"Validade: {validity_text}\n"
+            f"Vinculada à máquina: {binding_text}\n"
+            f"License ID: {self.license_info.license_id}"
+        )
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=12)
@@ -2116,9 +2138,6 @@ class ColaboradoresApp:
         self.btn_open_base = ttk.Button(row2, text="Abrir pasta base", command=lambda: open_in_file_manager(str(BASE_DIR)))
         self.btn_open_base.pack(side="left")
 
-        self.btn_about = ttk.Button(row2, text="Sobre o Sistema", command=self.show_about)
-        self.btn_about.pack(side="left", padx=6)
-
         info = ttk.Label(
             main,
             text=(
@@ -2127,9 +2146,36 @@ class ColaboradoresApp:
             ),
             justify="left",
         )
-        info.pack(anchor="w", pady=(0, 10))
+        info.pack(anchor="w", pady=(0, 8))
 
-        self.text = tk.Text(main, wrap="word")
+        info_box = ttk.LabelFrame(main, text="Informações do sistema", padding=10)
+        info_box.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(
+            info_box,
+            text=f"{APP_NAME}  |  Versão: {APP_VERSION}",
+            justify="left",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            info_box,
+            text=f"Desenvolvedor: {AUTHOR_NAME}",
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            info_box,
+            text=f"E-mail: {AUTHOR_EMAIL}",
+            justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+        ttk.Label(
+            info_box,
+            text=self.build_license_summary_text(),
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+
+        self.text = tk.Text(main, wrap="word", height=14)
         self.text.pack(fill="both", expand=True)
 
         scrollbar = ttk.Scrollbar(self.text, command=self.text.yview)
@@ -3339,78 +3385,49 @@ class ColaboradoresApp:
 
         render_current_review()
         schedule_fit_previews()
-        
-    def show_about(self):
-        win = tk.Toplevel(self.root)
-        win.title("Sobre o sistema")
-        win.geometry("520x260")
-        win.resizable(False, False)
+    
+    def build_license_summary_text(self) -> str:
+        if not self.license_info:
+            return "Licença: informação indisponível"
 
-        screen_w = win.winfo_screenwidth()
-        screen_h = win.winfo_screenheight()
-        pos_x = max(0, (screen_w - 520) // 2)
-        pos_y = max(0, (screen_h - 260) // 2)
-        win.geometry(f"520x260+{pos_x}+{pos_y}")
+        scope_map = {
+            "person": "Pessoa",
+            "sector": "Setor",
+            "company": "Empresa",
+        }
 
-        main = ttk.Frame(win, padding=12)
-        main.pack(fill="both", expand=True)
+        license_type_map = {
+            "temporary": "Temporária",
+            "perpetual": "Vitalícia",
+        }
 
-        ttk.Label(
-            main,
-            text=APP_NAME,
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(0, 4))
+        scope_text = scope_map.get(
+            self.license_info.customer_type,
+            self.license_info.customer_type,
+        )
 
-        ttk.Label(
-            main,
-            text=f"Versão: {APP_VERSION}",
-        ).pack(anchor="w", pady=(0, 10))
+        license_type_text = license_type_map.get(
+            self.license_info.license_type,
+            self.license_info.license_type,
+        )
 
-        ttk.Label(
-            main,
-            text=f"Desenvolvido por: {AUTHOR_NAME}",
-            justify="left",
-        ).pack(anchor="w")
+        if self.license_info.license_type == "perpetual":
+            validity_text = "Vitalícia"
+        else:
+            validity_text = self.license_info.expires_at or "Não informado"
 
-        ttk.Label(
-            main,
-            text=f"E-mail: {AUTHOR_EMAIL}",
-            justify="left",
-        ).pack(anchor="w", pady=(4, 0))
+        binding_text = "Sim" if self.license_info.machine_bound else "Não"
 
-        ttk.Label(
-            main,
-            text=f"LinkedIn: {AUTHOR_LINKEDIN}",
-            justify="left",
-        ).pack(anchor="w", pady=(4, 0))
-
-        ttk.Label(
-            main,
-            text=f"GitHub: {AUTHOR_GITHUB}",
-            justify="left",
-        ).pack(anchor="w", pady=(4, 10))
-
-        buttons = ttk.Frame(main)
-        buttons.pack(fill="x", pady=(8, 0))
-
-        ttk.Button(
-            buttons,
-            text="Abrir LinkedIn",
-            command=lambda: webbrowser.open(AUTHOR_LINKEDIN),
-        ).pack(side="left")
-
-        ttk.Button(
-            buttons,
-            text="Abrir GitHub",
-            command=lambda: webbrowser.open(AUTHOR_GITHUB),
-        ).pack(side="left", padx=6)
-
-        ttk.Button(
-            buttons,
-            text="Fechar",
-            command=win.destroy,
-        ).pack(side="right")
-
+        return (
+            f"Licenciado para: {self.license_info.customer_name}\n"
+            f"Escopo autorizado: {scope_text}\n"
+            f"Tipo de licença: {license_type_text}\n"
+            f"Validade: {validity_text}\n"
+            f"Vinculada à máquina: {binding_text}\n"
+            f"Identificador da licença: {self.license_info.license_id}"
+        )
+    
+    
     def open_last_output(self):
         if self.is_busy:
             messagebox.showinfo("Aguarde", "Há uma operação em andamento.")
@@ -3692,7 +3709,7 @@ def main() -> int:
     configure_tesseract()
     
     try:
-        validate_license()
+        license_result = validate_license()
     except LicenseValidationError as exc:
         return handle_license_failure(exc)
 
@@ -3709,7 +3726,7 @@ def main() -> int:
         style.theme_use("vista")
     except Exception:
         pass
-    app = ColaboradoresApp(root)
+    app = ColaboradoresApp(root, license_info=license_result)
     root.mainloop()
     return 0
 

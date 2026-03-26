@@ -42,6 +42,20 @@ def get_license_path(base_dir: Path) -> Path:
 
 
 def get_public_key_path(base_dir: Path) -> Path:
+    candidates = [
+        base_dir / "public_key.pem",
+        base_dir / "_internal" / "public_key.pem",
+        Path(__file__).resolve().parent / "public_key.pem",
+    ]
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "public_key.pem")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
     return base_dir / "public_key.pem"
 
 

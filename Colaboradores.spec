@@ -5,7 +5,7 @@ a = Analysis(
     ['colaboradores_local.py'],
     pathex=[],
     binaries=[],
-    datas=[('tesseract', 'tesseract')],
+    datas=[('tesseract', 'tesseract'), ('public_key.pem', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
