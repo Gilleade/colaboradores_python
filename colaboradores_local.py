@@ -17,6 +17,13 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from difflib import SequenceMatcher
 
+from license_validator import (
+    LicenseValidationError,
+    get_current_machine_id,
+    save_activation_request,
+    validate_license,
+)
+
 #Arquivo XLSX
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -49,6 +56,7 @@ APP_DIR = get_app_dir()
 BASE_DIR = APP_DIR / "colaboradores_data"
 BRUTO_DIR = BASE_DIR / "bruto"
 PROCESSADO_DIR = BASE_DIR / "processado"
+ACTIVATION_REQUEST_PATH = APP_DIR / "activation_request.json"
 OCR_LANG = "por"
 
 APP_NAME = "Separador de Listas e Provas"
@@ -3427,10 +3435,164 @@ def open_in_file_manager(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+def show_selectable_license_error(title: str, message: str) -> None:
+    if tk is None:
+        return
+
+    root = None
+
+    try:
+        root = tk.Tk()
+        root.title(title)
+        root.geometry("780x430")
+        root.minsize(700, 360)
+
+        container = tk.Frame(root, padx=12, pady=12)
+        container.pack(fill="both", expand=True)
+
+        title_label = tk.Label(
+            container,
+            text=title,
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+            justify="left",
+        )
+        title_label.pack(fill="x", pady=(0, 8))
+
+        info_label = tk.Label(
+            container,
+            text="Selecione ou copie as informações abaixo para solicitar a liberação da licença.",
+            anchor="w",
+            justify="left",
+        )
+        info_label.pack(fill="x", pady=(0, 8))
+
+        text_widget = tk.Text(
+            container,
+            wrap="word",
+            height=16,
+            font=("Consolas", 10),
+        )
+        text_widget.pack(fill="both", expand=True)
+        text_widget.insert("1.0", message)
+        text_widget.focus_set()
+
+        button_frame = tk.Frame(container)
+        button_frame.pack(fill="x", pady=(10, 0))
+
+        def copy_all() -> None:
+            content = text_widget.get("1.0", "end-1c")
+            root.clipboard_clear()
+            root.clipboard_append(content)
+            root.update()
+
+        tk.Button(
+            button_frame,
+            text="Copiar mensagem",
+            command=copy_all,
+            width=18,
+        ).pack(side="left")
+
+        tk.Button(
+            button_frame,
+            text="Fechar",
+            command=root.destroy,
+            width=12,
+        ).pack(side="right")
+
+        root.mainloop()
+
+    except Exception:
+        if messagebox is not None:
+            try:
+                messagebox.showerror(title, message)
+            except Exception:
+                pass
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+def handle_license_failure(exc: Exception) -> int:
+    machine_id = get_current_machine_id() or "indisponível"
+    activation_path = None
+
+    try:
+        activation_path = save_activation_request(
+            ACTIVATION_REQUEST_PATH,
+            customer_name="",
+            customer_type="person",
+        )
+    except Exception:
+        activation_path = None
+
+    exc_text = str(exc).strip()
+
+    if "Arquivo não encontrado" in exc_text and "license.json" in exc_text:
+        error_summary = "Nenhum arquivo de licença foi encontrado para esta instalação."
+    elif "assinatura" in exc_text.lower():
+        error_summary = "O arquivo de licença encontrado é inválido ou foi alterado."
+    elif "expirada" in exc_text.lower():
+        error_summary = "A licença desta instalação está expirada."
+    elif "outro computador" in exc_text.lower():
+        error_summary = "A licença informada pertence a outro computador."
+    elif "retrocesso" in exc_text.lower():
+        error_summary = "Foi detectada inconsistência na data/hora do Windows."
+    else:
+        error_summary = "Não foi possível validar a licença desta instalação."
+
+    lines = [
+        "Licença não validada",
+        "====================",
+        "",
+        error_summary,
+        "",
+        f"Detalhe técnico: {exc_text}",
+        "",
+        f"Desenvolvedor responsável: {AUTHOR_NAME}",
+        f"E-mail para contato: {AUTHOR_EMAIL}",
+        "",
+        f"Machine ID: {machine_id}",
+    ]
+
+    if activation_path:
+        lines.extend(
+            [
+                "",
+                "Foi gerado automaticamente um arquivo de solicitação de ativação em:",
+                str(activation_path),
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "Entre em contato com o desenvolvedor e envie o Machine ID acima",
+            "ou o arquivo de solicitação de ativação para emissão da licença correta.",
+        ]
+    )
+
+    msg = "\n".join(lines)
+
+    print(msg)
+
+    if tk is not None and len(sys.argv) == 1:
+        show_selectable_license_error("Licença não validada", msg)
+
+    return 1
+
 
 def run_cli(pdf_path: str) -> int:
     ensure_base_folders()
     configure_tesseract()
+    
+    try:
+        validate_license()
+    except LicenseValidationError as exc:
+        return handle_license_failure(exc)
 
     def cb(msg: str):
         print(msg)
@@ -3451,6 +3613,11 @@ def run_cli(pdf_path: str) -> int:
 def main() -> int:
     ensure_base_folders()
     configure_tesseract()
+    
+    try:
+        validate_license()
+    except LicenseValidationError as exc:
+        return handle_license_failure(exc)
 
     if len(sys.argv) > 1:
         return run_cli(sys.argv[1])

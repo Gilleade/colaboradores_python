@@ -11,3 +11,4 @@ dependencies:
   - pillow
   - openpyxl
   - pyinstaller
+  - cryptography

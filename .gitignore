@@ -3,3 +3,6 @@
 /colaboradores_data
 /build
 /dist
+*.pem
+*json
+*.log
