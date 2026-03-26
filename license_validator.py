@@ -175,33 +175,21 @@ def get_current_machine_id() -> Optional[str]:
     return build_machine_id()
 
 
-def build_activation_request(
-    customer_name: str = "",
-    customer_type: str = "person",
-) -> dict[str, Any]:
+def build_activation_request() -> dict[str, Any]:
     base_dir = get_base_dir()
     machine_id = get_current_machine_id()
 
     return {
         "app_id": "colaboradores",
         "app_name": "Separador de Listas e Provas",
-        "customer_name": customer_name.strip(),
-        "customer_type": customer_type,
         "machine_id": machine_id,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "expected_license_path": str(get_license_path(base_dir)),
     }
     
 
-def save_activation_request(
-    output_path: Path,
-    customer_name: str = "",
-    customer_type: str = "person",
-) -> Path:
-    request_data = build_activation_request(
-        customer_name=customer_name,
-        customer_type=customer_type,
-    )
+def save_activation_request(output_path: Path) -> Path:
+    request_data = build_activation_request()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(

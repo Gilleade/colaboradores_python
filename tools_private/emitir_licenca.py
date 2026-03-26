@@ -19,8 +19,8 @@ def load_activation_request(path: Path) -> dict:
     except json.JSONDecodeError as exc:
         raise ValueError(f"JSON inválido no arquivo de ativação: {path}") from exc
 
-    required_fields = ["app_id", "app_name", "customer_type", "customer_name", "machine_id"]
-    missing = [field for field in required_fields if field not in data]
+    required_fields = ["app_id", "app_name", "machine_id"]
+    missing = [field for field in required_fields if not data.get(field)]
     if missing:
         raise ValueError(
             f"Campos obrigatórios ausentes no arquivo de ativação: {', '.join(missing)}"
@@ -32,10 +32,10 @@ def load_activation_request(path: Path) -> dict:
 def build_payload(args: argparse.Namespace) -> dict:
     
     if not args.customer_type:
-        raise ValueError("É necessário informar customer_type ou usar --activation-request.")
+        raise ValueError("É necessário informar --customer-type explicitamente.")
 
     if not args.customer_name:
-        raise ValueError("É necessário informar customer_name ou usar --activation-request.")
+        raise ValueError("É necessário informar --customer-name explicitamente.")
     
     payload = {
         "app_id": "colaboradores",
@@ -96,6 +96,11 @@ def main() -> None:
         required=False,
         help="Caminho para um activation_request.json gerado pelo programa",
     )
+    parser.add_argument(
+        "--bind-to-activation-machine",
+        action="store_true",
+        help="Vincula a licença à machine_id presente no activation_request.json",
+    )
 
     args = parser.parse_args()
 
@@ -109,14 +114,17 @@ def main() -> None:
         activation_request_path = Path(args.activation_request).resolve()
         activation_data = load_activation_request(activation_request_path)
 
-        if not args.customer_name:
-            args.customer_name = activation_data.get("customer_name", "")
+        if args.bind_to_activation_machine:
+            if args.machine_id:
+                raise ValueError(
+                    "Use apenas --machine-id manualmente ou --bind-to-activation-machine, não ambos."
+                )
 
-        if not args.customer_type:
-            args.customer_type = activation_data.get("customer_type", "person")
+            request_machine_id = activation_data.get("machine_id")
+            if not request_machine_id:
+                raise ValueError("O arquivo de ativação não possui machine_id válida.")
 
-        if not args.machine_id:
-            args.machine_id = activation_data.get("machine_id")
+            args.machine_id = request_machine_id
 
     payload = build_payload(args)
     signature = sign_payload(payload, private_key_path)

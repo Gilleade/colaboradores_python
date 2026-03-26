@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import csv
 import io
 import os
@@ -3435,6 +3436,66 @@ def open_in_file_manager(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+def install_license_from_dialog(parent: tk.Misc | None = None) -> tuple[bool, str]:
+    if filedialog is None:
+        return False, "O seletor de arquivos não está disponível nesta máquina."
+
+    selected_path = filedialog.askopenfilename(
+        parent=parent,
+        title="Selecionar arquivo de licença",
+        filetypes=[
+            ("Arquivos de licença", "*.json *.lic"),
+            ("Arquivos JSON", "*.json"),
+            ("Todos os arquivos", "*.*"),
+        ],
+    )
+
+    if not selected_path:
+        return False, ""
+
+    source_path = Path(selected_path)
+    target_path = APP_DIR / "license.json"
+    backup_path = APP_DIR / "license.json.bak"
+
+    try:
+        if target_path.exists():
+            if backup_path.exists():
+                backup_path.unlink()
+            target_path.replace(backup_path)
+
+        shutil.copy2(source_path, target_path)
+
+        validate_license()
+
+        if backup_path.exists():
+            backup_path.unlink()
+
+        return (
+            True,
+            f"Licença instalada com sucesso em:\n{target_path}\n\n"
+            "Feche esta janela e abra o programa novamente.",
+        )
+
+    except Exception as exc:
+        try:
+            if target_path.exists():
+                target_path.unlink()
+        except Exception:
+            pass
+
+        try:
+            if backup_path.exists():
+                backup_path.replace(target_path)
+        except Exception:
+            pass
+
+        return (
+            False,
+            "Não foi possível instalar a licença selecionada.\n\n"
+            f"Motivo: {exc}"
+        )
+
+
 def show_selectable_license_error(title: str, message: str) -> None:
     if tk is None:
         return
@@ -3492,6 +3553,26 @@ def show_selectable_license_error(title: str, message: str) -> None:
             command=copy_all,
             width=18,
         ).pack(side="left")
+        
+        def install_license() -> None:
+            ok, feedback = install_license_from_dialog(root)
+            if not feedback:
+                return
+
+            if ok:
+                if messagebox is not None:
+                    messagebox.showinfo("Licença", feedback)
+                root.destroy()
+            else:
+                if messagebox is not None:
+                    messagebox.showerror("Licença", feedback)
+
+        tk.Button(
+            button_frame,
+            text="Instalar licença",
+            command=install_license,
+            width=18,
+        ).pack(side="left", padx=(10, 0))
 
         tk.Button(
             button_frame,
@@ -3521,11 +3602,7 @@ def handle_license_failure(exc: Exception) -> int:
     activation_path = None
 
     try:
-        activation_path = save_activation_request(
-            ACTIVATION_REQUEST_PATH,
-            customer_name="",
-            customer_type="person",
-        )
+        activation_path = save_activation_request(ACTIVATION_REQUEST_PATH)
     except Exception:
         activation_path = None
 
