@@ -62,7 +62,7 @@ ACTIVATION_REQUEST_PATH = APP_DIR / "activation_request.json"
 OCR_LANG = "por"
 
 APP_NAME = "Separador de Listas e Provas"
-APP_VERSION = "1.0"
+APP_VERSION = "2.0"
 
 AUTHOR_NAME = "Gilleade Gonçalves Silva"
 AUTHOR_EMAIL = "gilleadesilva@gmail.com"
@@ -2086,25 +2086,16 @@ class ColaboradoresApp:
         self._log("Sistema pronto.")
         self._log("Selecione um PDF e use Pré-análise ou Processar.")
 
-    def build_license_summary_text(self) -> str:
-        if not self.license_info:
-            return "Licença: informação indisponível"
 
-        if self.license_info.license_type == "perpetual":
-            validity_text = "Vitalícia"
-        else:
-            validity_text = self.license_info.expires_at or "Não informado"
+    def format_license_date_br(self, value: Optional[str]) -> str:
+        if not value:
+            return "Não informado"
 
-        binding_text = "Sim" if self.license_info.machine_bound else "Não"
-
-        return (
-            f"Licenciado para: {self.license_info.customer_name}\n"
-            f"Escopo: {self.license_info.customer_type}\n"
-            f"Tipo de licença: {self.license_info.license_type}\n"
-            f"Validade: {validity_text}\n"
-            f"Vinculada à máquina: {binding_text}\n"
-            f"License ID: {self.license_info.license_id}"
-        )
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except ValueError:
+            return value
+    
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=12)
@@ -2148,34 +2139,60 @@ class ColaboradoresApp:
         )
         info.pack(anchor="w", pady=(0, 8))
 
-        info_box = ttk.LabelFrame(main, text="Informações do sistema", padding=10)
-        info_box.pack(fill="x", pady=(0, 10))
+        info_row = ttk.Frame(main)
+        info_row.pack(fill="x", pady=(0, 10))
 
-        ttk.Label(
-            info_box,
-            text=f"{APP_NAME}  |  Versão: {APP_VERSION}",
-            justify="left",
-        ).pack(anchor="w")
+        info_row.grid_columnconfigure(0, weight=1, uniform="info")
+        info_row.grid_columnconfigure(1, weight=1, uniform="info")
 
-        ttk.Label(
-            info_box,
-            text=f"Desenvolvedor: {AUTHOR_NAME}",
-            justify="left",
-        ).pack(anchor="w", pady=(4, 0))
+        system_box = ttk.LabelFrame(info_row, text="Sistema", padding=10)
+        system_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        ttk.Label(
-            info_box,
-            text=f"E-mail: {AUTHOR_EMAIL}",
-            justify="left",
-        ).pack(anchor="w", pady=(2, 0))
+        license_box = ttk.LabelFrame(info_row, text="Licença", padding=10)
+        license_box.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        ttk.Label(
-            info_box,
-            text=self.build_license_summary_text(),
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
+        system_text_value = (
+            f"{APP_NAME}\n"
+            f"Versão: {APP_VERSION}\n"
+            f"Desenvolvedor: {AUTHOR_NAME}\n"
+            f"E-mail: {AUTHOR_EMAIL}"
+        )
 
-        self.text = tk.Text(main, wrap="word", height=14)
+        system_text = tk.Text(
+            system_box,
+            wrap="word",
+            height=7,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+            cursor="xterm",
+        )
+        system_text.pack(fill="both", expand=True)
+        system_text.insert("1.0", system_text_value)
+        system_text.bind("<Key>", lambda e: "break")
+        system_text.bind("<Control-v>", lambda e: "break")
+        system_text.bind("<Button-3>", lambda e: "break")
+
+        license_text = tk.Text(
+            license_box,
+            wrap="word",
+            height=7,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+            cursor="xterm",
+        )
+        license_text.pack(fill="both", expand=True)
+        license_text.insert("1.0", self.build_license_summary_text())
+        license_text.bind("<Key>", lambda e: "break")
+        license_text.bind("<Control-v>", lambda e: "break")
+        license_text.bind("<Button-3>", lambda e: "break")
+
+        self.text = tk.Text(main, wrap="word", height=12)
         self.text.pack(fill="both", expand=True)
 
         scrollbar = ttk.Scrollbar(self.text, command=self.text.yview)
@@ -3414,7 +3431,7 @@ class ColaboradoresApp:
         if self.license_info.license_type == "perpetual":
             validity_text = "Vitalícia"
         else:
-            validity_text = self.license_info.expires_at or "Não informado"
+            validity_text = self.format_license_date_br(self.license_info.expires_at)
 
         binding_text = "Sim" if self.license_info.machine_bound else "Não"
 
