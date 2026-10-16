@@ -298,7 +298,7 @@ Dentro dela deve estar o executável `Colaboradores.exe`.
 
 ### Recomendação prática
 
-Para manter o build mais previsível entre diferentes máquinas, recomenda-se gerar o executável sempre com o ambiente `wave-analysis` ativo e manter a pasta `tesseract` ao lado do projeto quando a intenção for distribuir uma versão realmente portátil.
+Para manter o build mais previsível entre diferentes máquinas, recomenda-se gerar o executável sempre com o ambiente `colaboradores-python` ativo e manter a pasta `tesseract` ao lado do projeto quando a intenção for distribuir uma versão realmente portátil.
 
 
 ## Como iniciar a aplicação empacotada
@@ -524,7 +524,7 @@ tesseract/tesseract.exe
 tesseract/tessdata/por.traineddata
 ```
 
-Caso prefira, também é possível deixar o Tesseract instalado e disponível no `PATH` da máquina de desenvolvimento, desde que o ambiente `wave-analysis` esteja ativo quando o projeto for executado.
+Caso prefira, também é possível deixar o Tesseract instalado e disponível no `PATH` da máquina de desenvolvimento, desde que o ambiente `colaboradores-python` esteja ativo quando o projeto for executado.
 
 ### O executável não abre
 Verifique se:
