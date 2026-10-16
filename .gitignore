@@ -6,3 +6,10 @@
 *.pem
 *json
 *.log
+
+# Python compilado (guarda o caminho local da maquina)
+__pycache__/
+*.py[cod]
+
+# Chaves de licenca
+tools_private/keys/
