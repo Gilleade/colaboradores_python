@@ -2,6 +2,12 @@
 
 Aplicação local em Python para identificar, separar e relacionar automaticamente páginas de **listas de treinamento** e **provas** dentro de um PDF, gerando arquivos finais organizados por colaborador, além de relatórios de conferência e uma etapa de **revisão manual assistida** para os casos em que o pareamento automático não é conclusivo.
 
+## Contexto
+
+Este projeto nasceu de uma necessidade real. Uma empresa recebia listas de presença e provas de treinamento misturadas em um único PDF, muitas vezes escaneado, e precisava separar e conferir cada par manualmente, página por página.
+
+Desenvolvi a ferramenta de forma voluntária para automatizar essa rotina, e ela passou a ser usada no dia a dia da equipe responsável.
+
 ## Visão geral
 
 O sistema foi desenvolvido para reduzir o trabalho manual envolvido na conferência de documentos de treinamentos, principalmente em cenários em que um único PDF reúne páginas de listas e provas do mesmo colaborador. A aplicação analisa o arquivo, reconhece padrões textuais, identifica códigos, separa blocos de prova, faz o pareamento com as listas correspondentes e exporta os PDFs finais automaticamente sempre que houver confiança suficiente.
